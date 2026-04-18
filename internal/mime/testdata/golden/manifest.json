@@ -1,0 +1,664 @@
+{
+  "description": "Golden test fixtures for HTML body parsing (StripHTML, etc.)",
+  "generated_by": "tools/extract_golden.py",
+  "source": "Sanitized real emails \u2014 structure preserved, content replaced",
+  "fixtures": [
+    {
+      "filename": "layout_table-simple.html",
+      "dimension": "layout",
+      "pattern": "table-simple",
+      "category": "atom",
+      "prevalence": 4846,
+      "original_size": 937,
+      "sanitized_size": 872
+    },
+    {
+      "filename": "decoration_class-based.html",
+      "dimension": "decoration",
+      "pattern": "class-based",
+      "category": "atom",
+      "prevalence": 3051,
+      "original_size": 422,
+      "sanitized_size": 487
+    },
+    {
+      "filename": "decoration_class-based.html",
+      "dimension": "quotes",
+      "pattern": "gmail-quote",
+      "category": "atom",
+      "prevalence": 2468,
+      "original_size": 422,
+      "sanitized_size": 487
+    },
+    {
+      "filename": "decoration_class-based.html",
+      "dimension": "composition",
+      "pattern": "fragment + div-based + gmail-quote",
+      "category": "composition",
+      "prevalence": 865,
+      "original_size": 422,
+      "sanitized_size": 487
+    },
+    {
+      "filename": "specials_unsubscribe.html",
+      "dimension": "specials",
+      "pattern": "unsubscribe",
+      "category": "atom",
+      "prevalence": 367,
+      "original_size": 1778,
+      "sanitized_size": 1085
+    },
+    {
+      "filename": "layout_table-nested.html",
+      "dimension": "layout",
+      "pattern": "table-nested",
+      "category": "atom",
+      "prevalence": 802,
+      "original_size": 3456,
+      "sanitized_size": 3064
+    },
+    {
+      "filename": "composition_full-doctype_table-deep_none.html",
+      "dimension": "composition",
+      "pattern": "full-doctype + table-deep + none",
+      "category": "composition",
+      "prevalence": 599,
+      "original_size": 1814,
+      "sanitized_size": 1490
+    },
+    {
+      "filename": "layout_div-based.html",
+      "dimension": "layout",
+      "pattern": "div-based",
+      "category": "atom",
+      "prevalence": 2582,
+      "original_size": 24,
+      "sanitized_size": 24
+    },
+    {
+      "filename": "layout_div-based.html",
+      "dimension": "composition",
+      "pattern": "fragment + div-based + none",
+      "category": "composition",
+      "prevalence": 111,
+      "original_size": 24,
+      "sanitized_size": 24
+    },
+    {
+      "filename": "composition_full-doctype_table-deep_outlook-quote.html",
+      "dimension": "composition",
+      "pattern": "full-doctype + table-deep + outlook-quote",
+      "category": "composition",
+      "prevalence": 220,
+      "original_size": 10630,
+      "sanitized_size": 8983
+    },
+    {
+      "filename": "quotes_forwarded-message.html",
+      "dimension": "quotes",
+      "pattern": "forwarded-message",
+      "category": "atom",
+      "prevalence": 2252,
+      "original_size": 511,
+      "sanitized_size": 546
+    },
+    {
+      "filename": "composition_fragment_table-deep_gmail-quote.html",
+      "dimension": "composition",
+      "pattern": "fragment + table-deep + gmail-quote",
+      "category": "composition",
+      "prevalence": 219,
+      "original_size": 5025,
+      "sanitized_size": 4623
+    },
+    {
+      "filename": "layout_br-delimited.html",
+      "dimension": "layout",
+      "pattern": "br-delimited",
+      "category": "atom",
+      "prevalence": 2,
+      "original_size": 515,
+      "sanitized_size": 252
+    },
+    {
+      "filename": "content_hr-dividers.html",
+      "dimension": "content",
+      "pattern": "hr-dividers",
+      "category": "atom",
+      "prevalence": 3287,
+      "original_size": 1185,
+      "sanitized_size": 1376
+    },
+    {
+      "filename": "entities_numeric.html",
+      "dimension": "entities",
+      "pattern": "numeric",
+      "category": "atom",
+      "prevalence": 77,
+      "original_size": 158,
+      "sanitized_size": 188
+    },
+    {
+      "filename": "envelope_full-doctype.html",
+      "dimension": "envelope",
+      "pattern": "full-doctype",
+      "category": "atom",
+      "prevalence": 1145,
+      "original_size": 1352,
+      "sanitized_size": 1169
+    },
+    {
+      "filename": "composition_full-doctype_table-nested_none.html",
+      "dimension": "composition",
+      "pattern": "full-doctype + table-nested + none",
+      "category": "composition",
+      "prevalence": 258,
+      "original_size": 4391,
+      "sanitized_size": 3807
+    },
+    {
+      "filename": "composition_full-no-doctype_table-nested_apple-mail-quote.html",
+      "dimension": "composition",
+      "pattern": "full-no-doctype + table-nested + apple-mail-quote",
+      "category": "composition",
+      "prevalence": 35,
+      "original_size": 10162,
+      "sanitized_size": 6018
+    },
+    {
+      "filename": "envelope_full-no-doctype.html",
+      "dimension": "envelope",
+      "pattern": "full-no-doctype",
+      "category": "atom",
+      "prevalence": 6990,
+      "original_size": 141,
+      "sanitized_size": 141
+    },
+    {
+      "filename": "envelope_full-no-doctype.html",
+      "dimension": "composition",
+      "pattern": "full-no-doctype + div-based + none",
+      "category": "composition",
+      "prevalence": 327,
+      "original_size": 141,
+      "sanitized_size": 141
+    },
+    {
+      "filename": "entities_mixed.html",
+      "dimension": "entities",
+      "pattern": "mixed",
+      "category": "atom",
+      "prevalence": 4441,
+      "original_size": 992,
+      "sanitized_size": 701
+    },
+    {
+      "filename": "entities_nbsp-heavy.html",
+      "dimension": "entities",
+      "pattern": "nbsp-heavy",
+      "category": "atom",
+      "prevalence": 1723,
+      "original_size": 4912,
+      "sanitized_size": 3686
+    },
+    {
+      "filename": "composition_full-no-doctype_table-simple_none.html",
+      "dimension": "composition",
+      "pattern": "full-no-doctype + table-simple + none",
+      "category": "composition",
+      "prevalence": 361,
+      "original_size": 2806,
+      "sanitized_size": 2395
+    },
+    {
+      "filename": "composition_full-no-doctype_table-simple_apple-mail-quote.html",
+      "dimension": "composition",
+      "pattern": "full-no-doctype + table-simple + apple-mail-quote",
+      "category": "composition",
+      "prevalence": 304,
+      "original_size": 1891,
+      "sanitized_size": 1407
+    },
+    {
+      "filename": "composition_fragment_table-nested_gmail-quote.html",
+      "dimension": "composition",
+      "pattern": "fragment + table-nested + gmail-quote",
+      "category": "composition",
+      "prevalence": 96,
+      "original_size": 8282,
+      "sanitized_size": 6408
+    },
+    {
+      "filename": "layout_paragraphs.html",
+      "dimension": "layout",
+      "pattern": "paragraphs",
+      "category": "atom",
+      "prevalence": 8,
+      "original_size": 144,
+      "sanitized_size": 62
+    },
+    {
+      "filename": "decoration_css-heavy.html",
+      "dimension": "decoration",
+      "pattern": "css-heavy",
+      "category": "atom",
+      "prevalence": 7135,
+      "original_size": 408,
+      "sanitized_size": 408
+    },
+    {
+      "filename": "content_rich-text.html",
+      "dimension": "content",
+      "pattern": "rich-text",
+      "category": "atom",
+      "prevalence": 10211,
+      "original_size": 385,
+      "sanitized_size": 385
+    },
+    {
+      "filename": "content_rich-text.html",
+      "dimension": "decoration",
+      "pattern": "style-block",
+      "category": "atom",
+      "prevalence": 12,
+      "original_size": 385,
+      "sanitized_size": 385
+    },
+    {
+      "filename": "composition_full-no-doctype_table-simple_blockquote.html",
+      "dimension": "composition",
+      "pattern": "full-no-doctype + table-simple + blockquote",
+      "category": "composition",
+      "prevalence": 1069,
+      "original_size": 4829,
+      "sanitized_size": 5163
+    },
+    {
+      "filename": "specials_nbsp-spacing.html",
+      "dimension": "specials",
+      "pattern": "nbsp-spacing",
+      "category": "atom",
+      "prevalence": 1739,
+      "original_size": 3495,
+      "sanitized_size": 3408
+    },
+    {
+      "filename": "composition_full-no-doctype_div-based_gmail-quote.html",
+      "dimension": "composition",
+      "pattern": "full-no-doctype + div-based + gmail-quote",
+      "category": "composition",
+      "prevalence": 68,
+      "original_size": 1644,
+      "sanitized_size": 1781
+    },
+    {
+      "filename": "content_lists.html",
+      "dimension": "content",
+      "pattern": "lists",
+      "category": "atom",
+      "prevalence": 5212,
+      "original_size": 1110,
+      "sanitized_size": 577
+    },
+    {
+      "filename": "content_headings.html",
+      "dimension": "content",
+      "pattern": "headings",
+      "category": "atom",
+      "prevalence": 935,
+      "original_size": 1786,
+      "sanitized_size": 1542
+    },
+    {
+      "filename": "content_headings.html",
+      "dimension": "layout",
+      "pattern": "table-deep",
+      "category": "atom",
+      "prevalence": 2127,
+      "original_size": 1786,
+      "sanitized_size": 1542
+    },
+    {
+      "filename": "content_headings.html",
+      "dimension": "composition",
+      "pattern": "full-no-doctype + table-deep + none",
+      "category": "composition",
+      "prevalence": 355,
+      "original_size": 1786,
+      "sanitized_size": 1542
+    },
+    {
+      "filename": "composition_full-no-doctype_div-based_forwarded-message.html",
+      "dimension": "composition",
+      "pattern": "full-no-doctype + div-based + forwarded-message",
+      "category": "composition",
+      "prevalence": 162,
+      "original_size": 3537,
+      "sanitized_size": 3644
+    },
+    {
+      "filename": "quotes_blockquote.html",
+      "dimension": "quotes",
+      "pattern": "blockquote",
+      "category": "atom",
+      "prevalence": 4721,
+      "original_size": 455,
+      "sanitized_size": 421
+    },
+    {
+      "filename": "quotes_blockquote.html",
+      "dimension": "quotes",
+      "pattern": "apple-mail-quote",
+      "category": "atom",
+      "prevalence": 1094,
+      "original_size": 455,
+      "sanitized_size": 421
+    },
+    {
+      "filename": "quotes_blockquote.html",
+      "dimension": "composition",
+      "pattern": "full-no-doctype + div-based + apple-mail-quote",
+      "category": "composition",
+      "prevalence": 71,
+      "original_size": 455,
+      "sanitized_size": 421
+    },
+    {
+      "filename": "composition_fragment_table-simple_gmail-quote.html",
+      "dimension": "composition",
+      "pattern": "fragment + table-simple + gmail-quote",
+      "category": "composition",
+      "prevalence": 881,
+      "original_size": 2198,
+      "sanitized_size": 1533
+    },
+    {
+      "filename": "composition_full-no-doctype_table-deep_gmail-quote.html",
+      "dimension": "composition",
+      "pattern": "full-no-doctype + table-deep + gmail-quote",
+      "category": "composition",
+      "prevalence": 52,
+      "original_size": 3960,
+      "sanitized_size": 3729
+    },
+    {
+      "filename": "content_images.html",
+      "dimension": "content",
+      "pattern": "images",
+      "category": "atom",
+      "prevalence": 8583,
+      "original_size": 385,
+      "sanitized_size": 278
+    },
+    {
+      "filename": "content_images.html",
+      "dimension": "specials",
+      "pattern": "tracking-pixel",
+      "category": "atom",
+      "prevalence": 1206,
+      "original_size": 385,
+      "sanitized_size": 278
+    },
+    {
+      "filename": "content_plain-text.html",
+      "dimension": "content",
+      "pattern": "plain-text",
+      "category": "atom",
+      "prevalence": 86,
+      "original_size": 6,
+      "sanitized_size": 29
+    },
+    {
+      "filename": "content_plain-text.html",
+      "dimension": "decoration",
+      "pattern": "none",
+      "category": "atom",
+      "prevalence": 50,
+      "original_size": 6,
+      "sanitized_size": 29
+    },
+    {
+      "filename": "content_plain-text.html",
+      "dimension": "entities",
+      "pattern": "none",
+      "category": "atom",
+      "prevalence": 169,
+      "original_size": 6,
+      "sanitized_size": 29
+    },
+    {
+      "filename": "content_plain-text.html",
+      "dimension": "envelope",
+      "pattern": "fragment",
+      "category": "atom",
+      "prevalence": 2233,
+      "original_size": 6,
+      "sanitized_size": 29
+    },
+    {
+      "filename": "content_plain-text.html",
+      "dimension": "layout",
+      "pattern": "minimal",
+      "category": "atom",
+      "prevalence": 1,
+      "original_size": 6,
+      "sanitized_size": 29
+    },
+    {
+      "filename": "content_plain-text.html",
+      "dimension": "quotes",
+      "pattern": "none",
+      "category": "atom",
+      "prevalence": 2139,
+      "original_size": 6,
+      "sanitized_size": 29
+    },
+    {
+      "filename": "composition_full-no-doctype_table-deep_outlook-quote.html",
+      "dimension": "composition",
+      "pattern": "full-no-doctype + table-deep + outlook-quote",
+      "category": "composition",
+      "prevalence": 389,
+      "original_size": 6859,
+      "sanitized_size": 6623
+    },
+    {
+      "filename": "composition_full-no-doctype_table-simple_outlook-quote.html",
+      "dimension": "composition",
+      "pattern": "full-no-doctype + table-simple + outlook-quote",
+      "category": "composition",
+      "prevalence": 1426,
+      "original_size": 3343,
+      "sanitized_size": 2497
+    },
+    {
+      "filename": "entities_named-only.html",
+      "dimension": "entities",
+      "pattern": "named-only",
+      "category": "atom",
+      "prevalence": 3958,
+      "original_size": 229,
+      "sanitized_size": 274
+    },
+    {
+      "filename": "entities_named-only.html",
+      "dimension": "specials",
+      "pattern": "signature",
+      "category": "atom",
+      "prevalence": 4593,
+      "original_size": 229,
+      "sanitized_size": 274
+    },
+    {
+      "filename": "quotes_outlook-quote.html",
+      "dimension": "quotes",
+      "pattern": "outlook-quote",
+      "category": "atom",
+      "prevalence": 2665,
+      "original_size": 1602,
+      "sanitized_size": 1541
+    },
+    {
+      "filename": "quotes_outlook-quote.html",
+      "dimension": "specials",
+      "pattern": "mso-conditional",
+      "category": "atom",
+      "prevalence": 4159,
+      "original_size": 1602,
+      "sanitized_size": 1541
+    },
+    {
+      "filename": "quotes_outlook-quote.html",
+      "dimension": "composition",
+      "pattern": "full-no-doctype + div-based + outlook-quote",
+      "category": "composition",
+      "prevalence": 453,
+      "original_size": 1602,
+      "sanitized_size": 1541
+    },
+    {
+      "filename": "specials_base64-images.html",
+      "dimension": "specials",
+      "pattern": "base64-images",
+      "category": "atom",
+      "prevalence": 20,
+      "original_size": 4644,
+      "sanitized_size": 4129
+    },
+    {
+      "filename": "composition_full-no-doctype_table-simple_gmail-quote.html",
+      "dimension": "composition",
+      "pattern": "full-no-doctype + table-simple + gmail-quote",
+      "category": "composition",
+      "prevalence": 272,
+      "original_size": 2607,
+      "sanitized_size": 2012
+    },
+    {
+      "filename": "quotes_generic-on-wrote.html",
+      "dimension": "quotes",
+      "pattern": "generic-on-wrote",
+      "category": "atom",
+      "prevalence": 7,
+      "original_size": 1149,
+      "sanitized_size": 1087
+    },
+    {
+      "filename": "specials_br-runs.html",
+      "dimension": "specials",
+      "pattern": "br-runs",
+      "category": "atom",
+      "prevalence": 3541,
+      "original_size": 1194,
+      "sanitized_size": 908
+    },
+    {
+      "filename": "composition_full-no-doctype_table-nested_outlook-quote.html",
+      "dimension": "composition",
+      "pattern": "full-no-doctype + table-nested + outlook-quote",
+      "category": "composition",
+      "prevalence": 164,
+      "original_size": 6009,
+      "sanitized_size": 4527
+    },
+    {
+      "filename": "specials_script-tags.html",
+      "dimension": "specials",
+      "pattern": "script-tags",
+      "category": "atom",
+      "prevalence": 66,
+      "original_size": 6816,
+      "sanitized_size": 6462
+    },
+    {
+      "filename": "decoration_inline-style.html",
+      "dimension": "decoration",
+      "pattern": "inline-style",
+      "category": "atom",
+      "prevalence": 3161,
+      "original_size": 313,
+      "sanitized_size": 313
+    },
+    {
+      "filename": "composition_full-no-doctype_div-based_blockquote.html",
+      "dimension": "composition",
+      "pattern": "full-no-doctype + div-based + blockquote",
+      "category": "composition",
+      "prevalence": 485,
+      "original_size": 1278,
+      "sanitized_size": 692
+    },
+    {
+      "filename": "composition_full-no-doctype_table-nested_blockquote.html",
+      "dimension": "composition",
+      "pattern": "full-no-doctype + table-nested + blockquote",
+      "category": "composition",
+      "prevalence": 94,
+      "original_size": 10769,
+      "sanitized_size": 9511
+    },
+    {
+      "filename": "composition_full-no-doctype_table-nested_forwarded-message.html",
+      "dimension": "composition",
+      "pattern": "full-no-doctype + table-nested + forwarded-message",
+      "category": "composition",
+      "prevalence": 86,
+      "original_size": 9993,
+      "sanitized_size": 9840
+    },
+    {
+      "filename": "composition_full-no-doctype_table-simple_forwarded-message.html",
+      "dimension": "composition",
+      "pattern": "full-no-doctype + table-simple + forwarded-message",
+      "category": "composition",
+      "prevalence": 465,
+      "original_size": 4975,
+      "sanitized_size": 4671
+    },
+    {
+      "filename": "content_pre-code.html",
+      "dimension": "content",
+      "pattern": "pre-code",
+      "category": "atom",
+      "prevalence": 104,
+      "original_size": 5157,
+      "sanitized_size": 3835
+    },
+    {
+      "filename": "composition_full-no-doctype_table-nested_none.html",
+      "dimension": "composition",
+      "pattern": "full-no-doctype + table-nested + none",
+      "category": "composition",
+      "prevalence": 52,
+      "original_size": 3503,
+      "sanitized_size": 2900
+    },
+    {
+      "filename": "composition_full-no-doctype_table-deep_forwarded-message.html",
+      "dimension": "composition",
+      "pattern": "full-no-doctype + table-deep + forwarded-message",
+      "category": "composition",
+      "prevalence": 135,
+      "original_size": 5459,
+      "sanitized_size": 5221
+    },
+    {
+      "filename": "content_link-heavy.html",
+      "dimension": "content",
+      "pattern": "link-heavy",
+      "category": "atom",
+      "prevalence": 7876,
+      "original_size": 3528,
+      "sanitized_size": 3017
+    },
+    {
+      "filename": "composition_full-no-doctype_table-deep_blockquote.html",
+      "dimension": "composition",
+      "pattern": "full-no-doctype + table-deep + blockquote",
+      "category": "composition",
+      "prevalence": 116,
+      "original_size": 12726,
+      "sanitized_size": 11115
+    }
+  ]
+}
