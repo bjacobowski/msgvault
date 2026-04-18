@@ -228,6 +228,9 @@ func outputMessageJSON(msg *query.MessageDetail) error {
 		"attachments":            attachments,
 		"body_text":              msg.BodyText,
 		"body_html":              msg.BodyHTML,
+		"rfc822_message_id":      msg.RFC822MessageID,
+		"in_reply_to":            msg.InReplyTo,
+		"references":             msg.References,
 	}
 
 	if msg.ReceivedAt != nil {

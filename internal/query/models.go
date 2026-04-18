@@ -63,6 +63,11 @@ type MessageDetail struct {
 	BodyText string `json:"body_text"`
 	BodyHTML string `json:"body_html"`
 
+	// Threading
+	RFC822MessageID string   `json:"rfc822_message_id,omitempty"`
+	InReplyTo       string   `json:"in_reply_to,omitempty"`
+	References      []string `json:"references,omitempty"`
+
 	// Metadata
 	Labels      []string         `json:"labels"`
 	Attachments []AttachmentInfo `json:"attachments"`

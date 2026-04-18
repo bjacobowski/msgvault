@@ -197,7 +197,8 @@ func getMessageByQueryShared(ctx context.Context, db *sql.DB, tablePrefix string
 			m.sent_at,
 			m.received_at,
 			COALESCE(m.size_estimate, 0),
-			m.has_attachments
+			m.has_attachments,
+			COALESCE(m.rfc822_message_id, '')
 		FROM %smessages m
 		LEFT JOIN %sconversations conv ON conv.id = m.conversation_id
 		WHERE %s
@@ -216,6 +217,7 @@ func getMessageByQueryShared(ctx context.Context, db *sql.DB, tablePrefix string
 		&receivedAt,
 		&msg.SizeEstimate,
 		&msg.HasAttachments,
+		&msg.RFC822MessageID,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -255,6 +257,12 @@ func getMessageByQueryShared(ctx context.Context, db *sql.DB, tablePrefix string
 		}
 	}
 
+	// Fetch threading headers (In-Reply-To, References) from raw MIME
+	if err := fetchThreadingHeadersShared(ctx, db, tablePrefix, &msg); err != nil {
+		// Non-fatal: raw MIME may be absent for some messages
+		_ = err
+	}
+
 	// Fetch participants
 	if err := fetchParticipantsShared(ctx, db, tablePrefix, &msg); err != nil {
 		return nil, fmt.Errorf("fetch participants: %w", err)
@@ -271,6 +279,49 @@ func getMessageByQueryShared(ctx context.Context, db *sql.DB, tablePrefix string
 	}
 
 	return &msg, nil
+}
+
+// fetchThreadingHeadersShared populates InReplyTo and References on msg
+// by parsing the raw MIME blob from message_raw. RFC822MessageID is already
+// populated from the messages row; this only adds the headers not stored as
+// dedicated columns.
+func fetchThreadingHeadersShared(ctx context.Context, db *sql.DB, tablePrefix string, msg *MessageDetail) error {
+	var compressed []byte
+	var compression sql.NullString
+
+	err := db.QueryRowContext(ctx, fmt.Sprintf(`
+		SELECT raw_data, compression FROM %smessage_raw WHERE message_id = ?
+	`, tablePrefix), msg.ID).Scan(&compressed, &compression)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	var rawData []byte
+	if compression.Valid && compression.String == "zlib" {
+		r, err := zlib.NewReader(bytes.NewReader(compressed))
+		if err != nil {
+			return err
+		}
+		defer func() { _ = r.Close() }()
+		rawData, err = io.ReadAll(r)
+		if err != nil {
+			return err
+		}
+	} else {
+		rawData = compressed
+	}
+
+	parsed, err := mime.Parse(rawData)
+	if err != nil {
+		return err
+	}
+
+	msg.InReplyTo = parsed.InReplyTo
+	msg.References = parsed.References
+	return nil
 }
 
 // collectGmailIDs scans rows for source_message_id strings.
