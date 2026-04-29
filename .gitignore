@@ -1,6 +1,8 @@
 # Go binaries
 /msgvault
 /msgvault.exe
+/msgvault-omgnos
+/msgvault-omgnos.exe
 /mimeshootout
 
 # Database files

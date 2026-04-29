@@ -1,7 +1,7 @@
 # Dev build script for Windows
 # Usage: powershell -File scripts/build.ps1
 #
-# Builds msgvault.exe in the repo root with debug info and FTS5 +
+# Builds msgvault-omgnos.exe in the repo root with debug info and FTS5 +
 # sqlite-vec support. Requires Go, a C compiler (GCC via MSYS2/MinGW
 # or TDM-GCC), and sqlite3 development headers. Install them under
 # MSYS2 with `pacman -S mingw-w64-ucrt-x86_64-sqlite3` (preferred) or
@@ -60,10 +60,10 @@ if ($msys2Bin -and (Test-Path "$msys2Bin\gcc.exe") -and ($env:Path -notlike "*$m
 Add-CgoFlag "CGO_CFLAGS" "-fgnu89-inline"
 Add-CgoFlag "CGO_LDFLAGS" "-Wl,--allow-multiple-definition"
 
-Write-Host "Building msgvault $version ($commit)..."
-& go build -tags "fts5 sqlite_vec" -ldflags "$ldflags" -o msgvault.exe ./cmd/msgvault
+Write-Host "Building msgvault-omgnos $version ($commit)..."
+& go build -tags "fts5 sqlite_vec" -ldflags "$ldflags" -o msgvault-omgnos.exe ./cmd/msgvault
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Build failed." -ForegroundColor Red
     exit 1
 }
-Write-Host "Built: msgvault.exe" -ForegroundColor Green
+Write-Host "Built: msgvault-omgnos.exe" -ForegroundColor Green
