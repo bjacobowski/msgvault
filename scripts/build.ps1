@@ -4,9 +4,9 @@
 # Builds msgvault.exe in the repo root with debug info and FTS5 +
 # sqlite-vec support. Requires Go, a C compiler (GCC via MSYS2/MinGW
 # or TDM-GCC), and sqlite3 development headers. Install them under
-# MSYS2 with `pacman -S mingw-w64-x86_64-sqlite3` and ensure
-# CGO_CFLAGS points to the include directory (this script sets it
-# automatically for the default MSYS2 path).
+# MSYS2 with `pacman -S mingw-w64-ucrt-x86_64-sqlite3` (preferred) or
+# `pacman -S mingw-w64-x86_64-sqlite3` (legacy mingw64). This script
+# autodetects the MSYS2 install path, preferring ucrt64 over mingw64.
 
 $ErrorActionPreference = 'Stop'
 
@@ -27,7 +27,8 @@ $env:CGO_ENABLED = 1
 # sqlite_vec on Windows + MinGW needs a specific set of C/linker flags,
 # each of which must be present no matter what the user already exported
 # in CGO_CFLAGS/CGO_LDFLAGS:
-#   - -IC:/msys64/mingw64/include points to the MSYS2-provided sqlite3.h.
+#   - -IC:/msys64/<env>/include points to the MSYS2-provided sqlite3.h
+#     (where <env> is ucrt64 if installed, else mingw64).
 #   - -fgnu89-inline makes arrow-go/v18's plain `inline` helpers emit an
 #     external definition; otherwise MinGW 15 leaves ArrowArrayIsReleased
 #     and friends undefined at link time.
@@ -45,8 +46,16 @@ function Add-CgoFlag([string]$var, [string]$flag) {
     }
 }
 
-if (Test-Path "C:\msys64\mingw64\include\sqlite3.h") {
+$msys2Bin = $null
+if (Test-Path "C:\msys64\ucrt64\include\sqlite3.h") {
+    Add-CgoFlag "CGO_CFLAGS" "-IC:/msys64/ucrt64/include"
+    $msys2Bin = "C:\msys64\ucrt64\bin"
+} elseif (Test-Path "C:\msys64\mingw64\include\sqlite3.h") {
     Add-CgoFlag "CGO_CFLAGS" "-IC:/msys64/mingw64/include"
+    $msys2Bin = "C:\msys64\mingw64\bin"
+}
+if ($msys2Bin -and (Test-Path "$msys2Bin\gcc.exe") -and ($env:Path -notlike "*$msys2Bin*")) {
+    $env:Path = "$msys2Bin;$env:Path"
 }
 Add-CgoFlag "CGO_CFLAGS" "-fgnu89-inline"
 Add-CgoFlag "CGO_LDFLAGS" "-Wl,--allow-multiple-definition"
