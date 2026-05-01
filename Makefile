@@ -17,23 +17,34 @@ LDFLAGS_RELEASE := $(LDFLAGS) -s -w
 # - sqlite_vec: enable the sqlite-vec extension for vector search
 BUILD_TAGS := fts5 sqlite_vec
 
+# .exe suffix on Windows (set by the OS env var in cmd/PowerShell and
+# inherited by MSYS2 shells) so chmod and install paths match what
+# `go build` actually produces.
+ifeq ($(OS),Windows_NT)
+EXEEXT := .exe
+else
+EXEEXT :=
+endif
+
+BIN := msgvault-omgnos$(EXEEXT)
+
 .PHONY: build build-release install clean test test-v fmt lint lint-ci tidy shootout run-shootout install-hooks bench help
 
 # Build the binary (debug)
 build:
-	CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS)" -o msgvault-omgnos ./cmd/msgvault
-	@chmod +x msgvault-omgnos
+	CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS)" -o $(BIN) ./cmd/msgvault
+	@chmod +x $(BIN)
 
 # Build with optimizations (release)
 build-release:
-	CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS_RELEASE)" -trimpath -o msgvault-omgnos ./cmd/msgvault
-	@chmod +x msgvault-omgnos
+	CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS_RELEASE)" -trimpath -o $(BIN) ./cmd/msgvault
+	@chmod +x $(BIN)
 
 # Install to ~/.local/bin, $GOBIN, or $GOPATH/bin
 install:
 	@if [ -d "$(HOME)/.local/bin" ]; then \
-		echo "Installing to ~/.local/bin/msgvault-omgnos"; \
-		CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS)" -o "$(HOME)/.local/bin/msgvault-omgnos" ./cmd/msgvault; \
+		echo "Installing to ~/.local/bin/$(BIN)"; \
+		CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS)" -o "$(HOME)/.local/bin/$(BIN)" ./cmd/msgvault; \
 	else \
 		INSTALL_DIR="$${GOBIN:-$$(go env GOBIN)}"; \
 		if [ -z "$$INSTALL_DIR" ]; then \
@@ -41,8 +52,8 @@ install:
 			INSTALL_DIR="$$GOPATH_FIRST/bin"; \
 		fi; \
 		mkdir -p "$$INSTALL_DIR"; \
-		echo "Installing to $$INSTALL_DIR/msgvault-omgnos"; \
-		CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS)" -o "$$INSTALL_DIR/msgvault-omgnos" ./cmd/msgvault; \
+		echo "Installing to $$INSTALL_DIR/$(BIN)"; \
+		CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS)" -o "$$INSTALL_DIR/$(BIN)" ./cmd/msgvault; \
 	fi
 
 # Clean build artifacts
