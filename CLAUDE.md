@@ -45,33 +45,33 @@ make test                     # Run tests
 make lint                     # Run linter
 
 # CLI usage
-./msgvault init-db                                    # Initialize database
-./msgvault add-account you@gmail.com                  # Browser OAuth
-./msgvault add-account you@gmail.com --headless       # Device flow
-./msgvault add-account you@acme.com --oauth-app acme  # Named OAuth app
-./msgvault sync-full you@gmail.com --limit 100        # Sync with limit
-./msgvault sync-full you@gmail.com --after 2024-01-01 # Sync date range
-./msgvault sync-incremental you@gmail.com             # Incremental sync
+./msgvault-omgnos init-db                                    # Initialize database
+./msgvault-omgnos add-account you@gmail.com                  # Browser OAuth
+./msgvault-omgnos add-account you@gmail.com --headless       # Device flow
+./msgvault-omgnos add-account you@acme.com --oauth-app acme  # Named OAuth app
+./msgvault-omgnos sync-full you@gmail.com --limit 100        # Sync with limit
+./msgvault-omgnos sync-full you@gmail.com --after 2024-01-01 # Sync date range
+./msgvault-omgnos sync-incremental you@gmail.com             # Incremental sync
 
 # TUI and analytics
-./msgvault tui                                        # Launch TUI
-./msgvault tui --account you@gmail.com                # Filter by account
-./msgvault tui --local                                # Force local (override remote config)
-./msgvault build-cache                                # Build Parquet cache
-./msgvault build-cache --full-rebuild                 # Full rebuild
-./msgvault stats                                      # Show archive stats
+./msgvault-omgnos tui                                        # Launch TUI
+./msgvault-omgnos tui --account you@gmail.com                # Filter by account
+./msgvault-omgnos tui --local                                # Force local (override remote config)
+./msgvault-omgnos build-cache                                # Build Parquet cache
+./msgvault-omgnos build-cache --full-rebuild                 # Full rebuild
+./msgvault-omgnos stats                                      # Show archive stats
 
 # Apple Mail import
-./msgvault import-emlx                                # Auto-discover accounts
-./msgvault import-emlx ~/Library/Mail                 # Explicit mail directory
-./msgvault import-emlx --account me@gmail.com         # Specific account(s)
-./msgvault import-emlx /path/to/dir --identifier me@gmail.com  # Manual fallback
+./msgvault-omgnos import-emlx                                # Auto-discover accounts
+./msgvault-omgnos import-emlx ~/Library/Mail                 # Explicit mail directory
+./msgvault-omgnos import-emlx --account me@gmail.com         # Specific account(s)
+./msgvault-omgnos import-emlx /path/to/dir --identifier me@gmail.com  # Manual fallback
 
 # Daemon mode (NAS/server deployment)
-./msgvault serve                                      # Start HTTP API + scheduled syncs
+./msgvault-omgnos serve                                      # Start HTTP API + scheduled syncs
 
 # Maintenance
-./msgvault repair-encoding                            # Fix UTF-8 encoding issues
+./msgvault-omgnos repair-encoding                            # Fix UTF-8 encoding issues
 ```
 
 ## Key Files
@@ -149,8 +149,8 @@ The TUI uses denormalized Parquet files for fast aggregate queries (~3000x faste
 ```
 
 **Workflow:**
-1. Sync emails: `./msgvault sync-full you@gmail.com`
-2. Launch TUI: `./msgvault tui` (auto-builds cache if needed)
+1. Sync emails: `./msgvault-omgnos sync-full you@gmail.com`
+2. Launch TUI: `./msgvault-omgnos tui` (auto-builds cache if needed)
 
 **Parquet schema:**
 - Denormalized: `from_email`, `from_domain`, `to_emails[]`, `labels[]`, etc.
@@ -177,10 +177,10 @@ The TUI automatically builds/updates the Parquet cache on launch when new messag
 ## Testing with Real Gmail Data
 
 ```bash
-./msgvault init-db
-./msgvault add-account you@gmail.com
-./msgvault sync-full you@gmail.com --after 2024-12-01 --before 2024-12-15
-./msgvault tui
+./msgvault-omgnos init-db
+./msgvault-omgnos add-account you@gmail.com
+./msgvault-omgnos sync-full you@gmail.com --after 2024-12-01 --before 2024-12-15
+./msgvault-omgnos tui
 ```
 
 Sync is **read-only** - no modifications to Gmail.
