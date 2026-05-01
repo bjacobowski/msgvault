@@ -1,0 +1,5 @@
+# mise tool versions for Windows-native dev (WSL/Linux/macOS use the Nix flake).
+# Keep Go pinned to the same version as flake.nix so both toolchain
+# managers produce bit-comparable builds.
+[tools]
+go = "1.25.9"
