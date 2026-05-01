@@ -21,19 +21,19 @@ BUILD_TAGS := fts5 sqlite_vec
 
 # Build the binary (debug)
 build:
-	CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS)" -o msgvault ./cmd/msgvault
-	@chmod +x msgvault
+	CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS)" -o msgvault-omgnos ./cmd/msgvault
+	@chmod +x msgvault-omgnos
 
 # Build with optimizations (release)
 build-release:
-	CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS_RELEASE)" -trimpath -o msgvault ./cmd/msgvault
-	@chmod +x msgvault
+	CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS_RELEASE)" -trimpath -o msgvault-omgnos ./cmd/msgvault
+	@chmod +x msgvault-omgnos
 
 # Install to ~/.local/bin, $GOBIN, or $GOPATH/bin
 install:
 	@if [ -d "$(HOME)/.local/bin" ]; then \
-		echo "Installing to ~/.local/bin/msgvault"; \
-		CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS)" -o "$(HOME)/.local/bin/msgvault" ./cmd/msgvault; \
+		echo "Installing to ~/.local/bin/msgvault-omgnos"; \
+		CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS)" -o "$(HOME)/.local/bin/msgvault-omgnos" ./cmd/msgvault; \
 	else \
 		INSTALL_DIR="$${GOBIN:-$$(go env GOBIN)}"; \
 		if [ -z "$$INSTALL_DIR" ]; then \
@@ -41,13 +41,13 @@ install:
 			INSTALL_DIR="$$GOPATH_FIRST/bin"; \
 		fi; \
 		mkdir -p "$$INSTALL_DIR"; \
-		echo "Installing to $$INSTALL_DIR/msgvault"; \
-		CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS)" -o "$$INSTALL_DIR/msgvault" ./cmd/msgvault; \
+		echo "Installing to $$INSTALL_DIR/msgvault-omgnos"; \
+		CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS)" -o "$$INSTALL_DIR/msgvault-omgnos" ./cmd/msgvault; \
 	fi
 
 # Clean build artifacts
 clean:
-	rm -f msgvault msgvault.exe mimeshootout
+	rm -f msgvault-omgnos msgvault-omgnos.exe mimeshootout
 	rm -rf bin/
 
 # Run tests
