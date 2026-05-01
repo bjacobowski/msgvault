@@ -44,6 +44,11 @@
             pkgs.golangci-lint
             pkgs.gcc
             pkgs.prek
+            # cgo deps: sqlite-vec needs sqlite3.h, mattn/go-sqlite3 needs
+            # the lib at link time. pkg-config lets the toolchain locate
+            # them via Nix's wrapped compiler.
+            pkgs.pkg-config
+            pkgs.sqlite
           ];
         };
       });
