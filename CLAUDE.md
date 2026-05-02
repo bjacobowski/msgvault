@@ -34,6 +34,57 @@ msgvault/
 └── Makefile                 # Build targets
 ```
 
+## Dev Environment
+
+Two parallel toolchain setups, by platform:
+
+### WSL / Linux / macOS — Nix flake + direnv
+
+The flake (`flake.nix`) pins Go 1.25.9, golangci-lint, gcc, sqlite, pkg-config,
+and prek. direnv auto-loads it when you `cd` into the repo.
+
+First-time setup on WSL Ubuntu: clone into the WSL filesystem (NOT `/mnt/c`,
+which is slow), then run the bootstrap script:
+
+```bash
+git clone -b omgnos https://github.com/bjacobowski/msgvault.git \
+    ~/github.com/bjacobowski/msgvault
+cd ~/github.com/bjacobowski/msgvault
+bash scripts/setup-wsl-dev.sh
+exec bash                     # pick up the new direnv hook
+cd ~/github.com/bjacobowski/msgvault   # direnv loads the flake
+which go                      # /nix/store/...go-1.25.9/bin/go
+make build                    # produces msgvault-omgnos
+```
+
+Without direnv: `nix develop` drops you into a subshell with the same env.
+
+### Windows-native — mise + MSYS2 ucrt64
+
+mise (`mise.toml`) pins Go 1.25.9; MSYS2 ucrt64 provides gcc + sqlite3 + make.
+First-time:
+
+```powershell
+# In MSYS2 ucrt64:
+pacman -S make mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-sqlite3
+
+# In PowerShell at the repo root:
+mise trust                    # approve mise.toml (one time, repeats per change)
+mise install                  # downloads Go 1.25.9
+pwsh -File scripts/build.ps1  # produces msgvault-omgnos.exe
+```
+
+`scripts/build.ps1` sets up the MSYS2 PATH and the cgo flags arrow-go/v18
+needs under MinGW 15, then delegates to `make build`. Run it from a normal
+PowerShell — no need to be inside an MSYS2 shell.
+
+### Notes on coexistence
+
+- mise is also installed in WSL (used for other projects). Inside the flake's
+  dev shell, Nix's Go takes PATH precedence over mise's shim.
+- Go version is pinned in two places (`flake.nix` and `mise.toml`); bump them
+  together when upgrading.
+
 ## Quick Commands
 
 ```bash
