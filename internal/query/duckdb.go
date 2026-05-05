@@ -1448,6 +1448,14 @@ func (e *DuckDBEngine) GetAttachment(ctx context.Context, id int64) (*Attachment
 	return nil, fmt.Errorf("GetAttachment requires SQLite: pass sqliteDB to NewDuckDBEngine")
 }
 
+// GetMessageRaw returns the decompressed raw MIME data for a message.
+func (e *DuckDBEngine) GetMessageRaw(ctx context.Context, id int64) ([]byte, error) {
+	if e.sqliteDB != nil {
+		return getMessageRawShared(ctx, e.sqliteDB, "", id)
+	}
+	return nil, fmt.Errorf("GetMessageRaw requires SQLite: pass sqliteDB to NewDuckDBEngine")
+}
+
 func (e *DuckDBEngine) getMessageByQuery(ctx context.Context, whereClause string, args ...interface{}) (*MessageDetail, error) {
 	return getMessageByQueryShared(ctx, e.db, "sqlite_db.", whereClause, args...)
 }
@@ -1654,6 +1662,15 @@ func (e *DuckDBEngine) Search(ctx context.Context, q *search.Query, limit, offse
 // This method delegates to SQLite for authoritative deletion status.
 // The Parquet cache may be stale if messages were deleted after the last cache build,
 // so we use SQLite directly to ensure deleted messages are properly excluded.
+func (e *DuckDBEngine) SearchByDomains(ctx context.Context, domains []string, after, before *time.Time, limit, offset int) ([]MessageSummary, error) {
+	// Delegate to SQLite — domain search requires JOINs across participants
+	// and message_recipients which are not available in the Parquet cache.
+	if e.sqliteEngine != nil {
+		return e.sqliteEngine.SearchByDomains(ctx, domains, after, before, limit, offset)
+	}
+	return nil, fmt.Errorf("SearchByDomains requires SQLite engine (participant data not in Parquet cache)")
+}
+
 func (e *DuckDBEngine) GetGmailIDsByFilter(ctx context.Context, filter MessageFilter) ([]string, error) {
 	// Delegate to SQLite for authoritative deletion status.
 	// Parquet cache may be stale if deletions occurred after the last build.

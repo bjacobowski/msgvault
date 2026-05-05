@@ -4,6 +4,7 @@ package querytest
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/wesm/msgvault/internal/query"
 	"github.com/wesm/msgvault/internal/search"
@@ -35,8 +36,12 @@ type MockEngine struct {
 	ListMessagesFunc             func(context.Context, query.MessageFilter) ([]query.MessageSummary, error)
 	SearchFastCountFunc          func(context.Context, *search.Query, query.MessageFilter) (int64, error)
 	GetGmailIDsByFilterFunc      func(context.Context, query.MessageFilter) ([]string, error)
+	SearchByDomainsFunc          func(context.Context, []string, *time.Time, *time.Time, int, int) ([]query.MessageSummary, error)
 	SearchFastWithStatsFunc      func(context.Context, *search.Query, string, query.MessageFilter, query.ViewType, int, int) (*query.SearchFastResult, error)
+	GetMessageRawFunc            func(context.Context, int64) ([]byte, error)
 	GetMessageSummariesByIDsFunc func(context.Context, []int64) ([]query.MessageSummary, error)
+
+	RawMessages map[int64][]byte
 }
 
 // Compile-time check.
@@ -121,6 +126,18 @@ func (m *MockEngine) GetAttachment(_ context.Context, id int64) (*query.Attachme
 	return nil, nil
 }
 
+func (m *MockEngine) GetMessageRaw(ctx context.Context, id int64) ([]byte, error) {
+	if m.GetMessageRawFunc != nil {
+		return m.GetMessageRawFunc(ctx, id)
+	}
+	if m.RawMessages != nil {
+		if raw, ok := m.RawMessages[id]; ok {
+			return raw, nil
+		}
+	}
+	return nil, nil
+}
+
 func (m *MockEngine) Search(ctx context.Context, q *search.Query, limit, offset int) ([]query.MessageSummary, error) {
 	if m.SearchFunc != nil {
 		return m.SearchFunc(ctx, q, limit, offset)
@@ -159,6 +176,13 @@ func (m *MockEngine) GetGmailIDsByFilter(ctx context.Context, filter query.Messa
 		return m.GetGmailIDsByFilterFunc(ctx, filter)
 	}
 	return m.GmailIDs, nil
+}
+
+func (m *MockEngine) SearchByDomains(ctx context.Context, domains []string, after, before *time.Time, limit, offset int) ([]query.MessageSummary, error) {
+	if m.SearchByDomainsFunc != nil {
+		return m.SearchByDomainsFunc(ctx, domains, after, before, limit, offset)
+	}
+	return m.SearchResults, nil
 }
 
 func (m *MockEngine) ListAccounts(_ context.Context) ([]query.AccountInfo, error) {

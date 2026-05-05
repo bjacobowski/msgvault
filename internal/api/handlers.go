@@ -17,7 +17,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/wesm/msgvault/internal/config"
 	"github.com/wesm/msgvault/internal/fileutil"
+	"github.com/wesm/msgvault/internal/mime"
 	"github.com/wesm/msgvault/internal/query"
+	"github.com/wesm/msgvault/internal/remote"
 	"github.com/wesm/msgvault/internal/scheduler"
 	"github.com/wesm/msgvault/internal/search"
 	"github.com/wesm/msgvault/internal/store"
@@ -91,6 +93,7 @@ type MessageSummary struct {
 type MessageDetail struct {
 	MessageSummary
 	Body        string           `json:"body"`
+	BodyHTML    string           `json:"body_html,omitempty"`
 	Attachments []AttachmentInfo `json:"attachments"`
 }
 
@@ -166,6 +169,73 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 // writeError writes an error response.
 func writeError(w http.ResponseWriter, status int, err string, message string) {
 	writeJSON(w, status, ErrorResponse{Error: err, Message: message})
+}
+
+// messageDetailFromQuery builds a MessageDetail response from a query-engine
+// MessageDetail, formatting addresses the same way the store path does and
+// emitting body_html alongside body when both are present.
+func messageDetailFromQuery(qMsg *query.MessageDetail) MessageDetail {
+	from := ""
+	if len(qMsg.From) > 0 {
+		if qMsg.From[0].Name != "" {
+			from = fmt.Sprintf("%s <%s>", qMsg.From[0].Name, qMsg.From[0].Email)
+		} else {
+			from = qMsg.From[0].Email
+		}
+	}
+
+	toAddrs := make([]string, 0, len(qMsg.To))
+	for _, a := range qMsg.To {
+		toAddrs = append(toAddrs, a.Email)
+	}
+	ccAddrs := make([]string, 0, len(qMsg.Cc))
+	for _, a := range qMsg.Cc {
+		ccAddrs = append(ccAddrs, a.Email)
+	}
+	bccAddrs := make([]string, 0, len(qMsg.Bcc))
+	for _, a := range qMsg.Bcc {
+		bccAddrs = append(bccAddrs, a.Email)
+	}
+
+	labels := qMsg.Labels
+	if labels == nil {
+		labels = []string{}
+	}
+
+	body := qMsg.BodyText
+	if body == "" {
+		body = qMsg.BodyHTML
+	}
+
+	attachments := make([]AttachmentInfo, 0, len(qMsg.Attachments))
+	for _, att := range qMsg.Attachments {
+		attachments = append(attachments, AttachmentInfo{
+			Filename: att.Filename,
+			MimeType: att.MimeType,
+			Size:     att.Size,
+		})
+	}
+
+	return MessageDetail{
+		MessageSummary: MessageSummary{
+			ID:             qMsg.ID,
+			ConversationID: qMsg.ConversationID,
+			Subject:        qMsg.Subject,
+			From:           from,
+			To:             toAddrs,
+			Cc:             ccAddrs,
+			Bcc:            bccAddrs,
+			SentAt:         qMsg.SentAt.UTC().Format(time.RFC3339),
+			DeletedAt:      formatDeletedAt(qMsg.DeletedAt),
+			Snippet:        qMsg.Snippet,
+			Labels:         labels,
+			HasAttach:      qMsg.HasAttachments,
+			SizeBytes:      qMsg.SizeEstimate,
+		},
+		Body:        body,
+		BodyHTML:    qMsg.BodyHTML,
+		Attachments: attachments,
+	}
 }
 
 // toMessageSummary converts an APIMessage to a MessageSummary for API responses.
@@ -268,16 +338,37 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGetMessage returns a single message by ID.
+// When the query engine is available, it returns separate body_html for rich
+// rendering; otherwise it falls back to the store layer (plain Body only).
 func (s *Server) handleGetMessage(w http.ResponseWriter, r *http.Request) {
-	if s.store == nil {
-		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
-		return
-	}
-
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_id", "Message ID must be a number")
+		return
+	}
+
+	if s.engine != nil {
+		qMsg, err := s.engine.GetMessage(r.Context(), id)
+		switch {
+		case err != nil && !isEngineUnsupported(err):
+			s.logger.Error("failed to get message via engine", "id", id, "error", err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve message")
+			return
+		case err == nil && qMsg == nil:
+			writeError(w, http.StatusNotFound, "not_found", "Message not found")
+			return
+		case err == nil:
+			writeJSON(w, http.StatusOK, messageDetailFromQuery(qMsg))
+			return
+		}
+		// err is unsupported sentinel — fall through to store path so
+		// engines that don't implement GetMessage still serve detail
+		// requests via the underlying SQLite store.
+	}
+
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
 		return
 	}
 
@@ -1520,4 +1611,78 @@ func (s *Server) handleDeepSearch(w http.ResponseWriter, r *http.Request) {
 		"offset":   offset,
 		"limit":    limit,
 	})
+}
+
+// isEngineUnsupported reports whether err indicates the configured query
+// engine cannot satisfy the requested operation. Postgres and remote engines
+// both have methods that return sentinel errors instead of data; mapping
+// those to a stable status code keeps the API honest about engine
+// capabilities rather than emitting 500 for predictable misses.
+func isEngineUnsupported(err error) bool {
+	return errors.Is(err, query.ErrNotImplemented) || errors.Is(err, remote.ErrNotSupported)
+}
+
+// handleMessageInline serves a CID-referenced inline MIME part (e.g. an
+// embedded image) from the raw message data. The CID is passed as a `cid`
+// query parameter so values containing `/` (legal per RFC 5322) round-trip
+// without ambiguity in the routing layer.
+func (s *Server) handleMessageInline(w http.ResponseWriter, r *http.Request) {
+	if s.engine == nil {
+		writeError(w, http.StatusServiceUnavailable, "engine_unavailable", "Query engine not available")
+		return
+	}
+
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "Message ID must be a number")
+		return
+	}
+
+	cidParam := r.URL.Query().Get("cid")
+	if cidParam == "" {
+		writeError(w, http.StatusBadRequest, "missing_cid", "Missing 'cid' query parameter")
+		return
+	}
+
+	raw, err := s.engine.GetMessageRaw(r.Context(), id)
+	if err != nil {
+		if isEngineUnsupported(err) {
+			writeError(w, http.StatusNotImplemented, "not_supported", "Inline MIME parts are not available on this engine")
+			return
+		}
+		s.logger.Error("failed to get raw MIME for inline part", "error", err, "id", id, "cid", cidParam)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load message")
+		return
+	}
+	if raw == nil {
+		writeError(w, http.StatusNotFound, "not_found", "Message raw data not found")
+		return
+	}
+
+	parsed, err := mime.Parse(raw)
+	if err != nil {
+		s.logger.Error("failed to parse MIME for inline part", "error", err, "id", id, "cid", cidParam)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to parse message")
+		return
+	}
+
+	for _, att := range parsed.Attachments {
+		if !att.IsInline || att.ContentID != cidParam {
+			continue
+		}
+		ct := strings.ToLower(strings.TrimSpace(att.ContentType))
+		if !strings.HasPrefix(ct, "image/") || strings.HasPrefix(ct, "image/svg") {
+			writeError(w, http.StatusUnsupportedMediaType, "unsupported_type", "Inline content type not permitted")
+			return
+		}
+		w.Header().Set("Content-Type", ct)
+		w.Header().Set("Content-Disposition", "inline")
+		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		_, _ = w.Write(att.Content)
+		return
+	}
+
+	writeError(w, http.StatusNotFound, "not_found", "Inline part not found")
 }

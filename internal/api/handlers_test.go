@@ -1,11 +1,15 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,6 +20,7 @@ import (
 	"github.com/wesm/msgvault/internal/config"
 	"github.com/wesm/msgvault/internal/query"
 	"github.com/wesm/msgvault/internal/query/querytest"
+	"github.com/wesm/msgvault/internal/remote"
 	"github.com/wesm/msgvault/internal/vector"
 	"github.com/wesm/msgvault/internal/vector/hybrid"
 )
@@ -229,6 +234,89 @@ func TestHandleGetMessageInvalidID(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestHandleGetMessage_EngineBodyHTML(t *testing.T) {
+	engine := &querytest.MockEngine{
+		Messages: map[int64]*query.MessageDetail{
+			42: {
+				ID:       42,
+				Subject:  "HTML Email",
+				From:     []query.Address{{Email: "sender@example.com", Name: "Sender"}},
+				To:       []query.Address{{Email: "rcpt@example.com"}},
+				SentAt:   time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC),
+				Labels:   []string{"INBOX"},
+				BodyText: "plain fallback",
+				BodyHTML: "<p>Hello</p>",
+			},
+		},
+	}
+	srv := newTestServerWithEngine(t, engine)
+
+	req := httptest.NewRequest("GET", "/api/v1/messages/42", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode: %v", err)
+	}
+	if resp["body"] != "plain fallback" {
+		t.Errorf("body = %q, want %q", resp["body"], "plain fallback")
+	}
+	if resp["body_html"] != "<p>Hello</p>" {
+		t.Errorf("body_html = %q, want %q", resp["body_html"], "<p>Hello</p>")
+	}
+	if resp["subject"] != "HTML Email" {
+		t.Errorf("subject = %q, want %q", resp["subject"], "HTML Email")
+	}
+	if resp["from"] != "Sender <sender@example.com>" {
+		t.Errorf("from = %q, want %q", resp["from"], "Sender <sender@example.com>")
+	}
+	if _, ok := resp["deleted_at"]; ok {
+		t.Errorf("deleted_at should be omitted for live message, got %v", resp["deleted_at"])
+	}
+}
+
+// TestHandleGetMessage_EngineDeletedAt verifies the engine path surfaces
+// deleted_at in the response when the underlying message has a
+// deleted_from_source_at timestamp.
+func TestHandleGetMessage_EngineDeletedAt(t *testing.T) {
+	deletedAt := time.Date(2024, 7, 1, 9, 30, 0, 0, time.UTC)
+	engine := &querytest.MockEngine{
+		Messages: map[int64]*query.MessageDetail{
+			42: {
+				ID:        42,
+				Subject:   "Deleted",
+				From:      []query.Address{{Email: "sender@example.com"}},
+				SentAt:    time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC),
+				DeletedAt: &deletedAt,
+				BodyText:  "hello",
+			},
+		},
+	}
+	srv := newTestServerWithEngine(t, engine)
+
+	req := httptest.NewRequest("GET", "/api/v1/messages/42", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode: %v", err)
+	}
+	want := deletedAt.Format(time.RFC3339)
+	if got := resp["deleted_at"]; got != want {
+		t.Errorf("deleted_at = %v, want %q", got, want)
 	}
 }
 
@@ -2043,5 +2131,273 @@ func TestHandleStats_VectorEnabledWithActive(t *testing.T) {
 
 	if _, exists := vs["building_generation"]; exists {
 		t.Error("expected 'building_generation' to be absent when there is no building generation")
+	}
+}
+
+// inlineURL builds the inline endpoint URL for a given message ID and CID,
+// URL-encoding the CID so values with reserved characters (including `/`)
+// round-trip correctly.
+func inlineURL(id int64, cid string) string {
+	return fmt.Sprintf("/api/v1/messages/%d/inline?cid=%s", id, url.QueryEscape(cid))
+}
+
+// rawMIMEWithImagePart returns a multipart MIME message containing a single
+// image part with the given Content-ID, content type, and Content-Disposition
+// (typically "inline" or "attachment").
+func rawMIMEWithImagePart(cid, contentType, disposition string, body []byte) []byte {
+	boundary := "test-boundary-123"
+	var b strings.Builder
+	b.WriteString("MIME-Version: 1.0\r\n")
+	b.WriteString("Content-Type: multipart/related; boundary=\"" + boundary + "\"\r\n")
+	b.WriteString("Subject: test\r\n")
+	b.WriteString("\r\n")
+	b.WriteString("--" + boundary + "\r\n")
+	b.WriteString("Content-Type: text/html; charset=utf-8\r\n\r\n")
+	b.WriteString("<html><body><img src=\"cid:" + cid + "\"></body></html>\r\n")
+	b.WriteString("--" + boundary + "\r\n")
+	b.WriteString("Content-Type: " + contentType + "\r\n")
+	b.WriteString("Content-Disposition: " + disposition + "\r\n")
+	b.WriteString("Content-ID: <" + cid + ">\r\n")
+	b.WriteString("Content-Transfer-Encoding: base64\r\n")
+	b.WriteString("\r\n")
+	b.WriteString(base64.StdEncoding.EncodeToString(body))
+	b.WriteString("\r\n--" + boundary + "--\r\n")
+	return []byte(b.String())
+}
+
+// rawMIMEWithInlineImage is a convenience wrapper for the common inline case.
+func rawMIMEWithInlineImage(cid, contentType string, body []byte) []byte {
+	return rawMIMEWithImagePart(cid, contentType, "inline", body)
+}
+
+func TestHandleMessageInline_ImagePNG(t *testing.T) {
+	imgData := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}
+	raw := rawMIMEWithInlineImage("logo@example", "image/png", imgData)
+
+	engine := &querytest.MockEngine{
+		RawMessages: map[int64][]byte{1: raw},
+	}
+	srv := newTestServerWithEngine(t, engine)
+
+	req := httptest.NewRequest("GET", inlineURL(1, "logo@example"), nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "image/png" {
+		t.Errorf("Content-Type = %q, want image/png", ct)
+	}
+	if cc := w.Header().Get("Cache-Control"); !strings.Contains(cc, "private") {
+		t.Errorf("Cache-Control = %q, should contain 'private'", cc)
+	}
+	if cc := w.Header().Get("Cache-Control"); strings.Contains(cc, "public") {
+		t.Errorf("Cache-Control = %q, must not contain 'public'", cc)
+	}
+	if cd := w.Header().Get("Content-Disposition"); cd != "inline" {
+		t.Errorf("Content-Disposition = %q, want 'inline'", cd)
+	}
+	if !bytes.Equal(w.Body.Bytes(), imgData) {
+		t.Errorf("response body = %x, want %x", w.Body.Bytes(), imgData)
+	}
+}
+
+// TestHandleMessageInline_NonInlineSkipped ensures that a part with a matching
+// Content-ID but Content-Disposition: attachment is not served via the inline
+// endpoint — only parts flagged IsInline by the MIME parser should be reachable.
+func TestHandleMessageInline_NonInlineSkipped(t *testing.T) {
+	imgData := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}
+	raw := rawMIMEWithImagePart("logo@example", "image/png", "attachment", imgData)
+
+	engine := &querytest.MockEngine{
+		RawMessages: map[int64][]byte{1: raw},
+	}
+	srv := newTestServerWithEngine(t, engine)
+
+	req := httptest.NewRequest("GET", inlineURL(1, "logo@example"), nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d for non-inline attachment", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestHandleMessageInline_RejectsXHTML(t *testing.T) {
+	raw := rawMIMEWithInlineImage("evil@nasty", "application/xhtml+xml", []byte("<script>alert(1)</script>"))
+
+	engine := &querytest.MockEngine{
+		RawMessages: map[int64][]byte{1: raw},
+	}
+	srv := newTestServerWithEngine(t, engine)
+
+	req := httptest.NewRequest("GET", inlineURL(1, "evil@nasty"), nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnsupportedMediaType {
+		t.Errorf("status = %d, want %d for application/xhtml+xml inline part", w.Code, http.StatusUnsupportedMediaType)
+	}
+}
+
+func TestHandleMessageInline_RejectsSVG(t *testing.T) {
+	raw := rawMIMEWithInlineImage("vuln@svg", "image/svg+xml", []byte("<svg onload='alert(1)'/>"))
+
+	engine := &querytest.MockEngine{
+		RawMessages: map[int64][]byte{1: raw},
+	}
+	srv := newTestServerWithEngine(t, engine)
+
+	req := httptest.NewRequest("GET", inlineURL(1, "vuln@svg"), nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnsupportedMediaType {
+		t.Errorf("status = %d, want %d for image/svg+xml inline part", w.Code, http.StatusUnsupportedMediaType)
+	}
+}
+
+func TestHandleMessageInline_CIDNotFound(t *testing.T) {
+	raw := rawMIMEWithInlineImage("logo@example", "image/png", []byte{0x89, 'P', 'N', 'G'})
+
+	engine := &querytest.MockEngine{
+		RawMessages: map[int64][]byte{1: raw},
+	}
+	srv := newTestServerWithEngine(t, engine)
+
+	req := httptest.NewRequest("GET", inlineURL(1, "nonexistent@cid"), nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestHandleMessageInline_NoEngine(t *testing.T) {
+	srv, _ := newTestServerWithMockStore(t)
+
+	req := httptest.NewRequest("GET", inlineURL(1, "any@cid"), nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestHandleMessageInline_MessageNotFound(t *testing.T) {
+	engine := &querytest.MockEngine{
+		RawMessages: map[int64][]byte{},
+	}
+	srv := newTestServerWithEngine(t, engine)
+
+	req := httptest.NewRequest("GET", inlineURL(999, "any@cid"), nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+// TestHandleMessageInline_CIDWithSlash verifies that Content-IDs containing
+// `/` round-trip correctly through the query parameter.
+func TestHandleMessageInline_CIDWithSlash(t *testing.T) {
+	cid := "path/with/slashes@example.com"
+	imgData := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}
+	raw := rawMIMEWithInlineImage(cid, "image/png", imgData)
+
+	engine := &querytest.MockEngine{
+		RawMessages: map[int64][]byte{1: raw},
+	}
+	srv := newTestServerWithEngine(t, engine)
+
+	req := httptest.NewRequest("GET", inlineURL(1, cid), nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if !bytes.Equal(w.Body.Bytes(), imgData) {
+		t.Errorf("response body = %x, want %x", w.Body.Bytes(), imgData)
+	}
+}
+
+// TestHandleMessageInline_MissingCID verifies that a request without the
+// `cid` query parameter returns 400.
+func TestHandleMessageInline_MissingCID(t *testing.T) {
+	engine := &querytest.MockEngine{
+		RawMessages: map[int64][]byte{1: rawMIMEWithInlineImage("logo@example", "image/png", []byte{0x89})},
+	}
+	srv := newTestServerWithEngine(t, engine)
+
+	req := httptest.NewRequest("GET", "/api/v1/messages/1/inline", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d for missing cid", w.Code, http.StatusBadRequest)
+	}
+}
+
+// TestHandleMessageInline_UnsupportedEngine verifies that engines which
+// can't fetch raw MIME (Postgres scaffold, remote engine) surface a stable
+// 501 instead of a generic 500.
+func TestHandleMessageInline_UnsupportedEngine(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"ErrNotImplemented", query.ErrNotImplemented},
+		{"ErrNotSupported", remote.ErrNotSupported},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			engine := &querytest.MockEngine{
+				GetMessageRawFunc: func(_ context.Context, _ int64) ([]byte, error) {
+					return nil, tc.err
+				},
+			}
+			srv := newTestServerWithEngine(t, engine)
+
+			req := httptest.NewRequest("GET", inlineURL(1, "logo@example"), nil)
+			w := httptest.NewRecorder()
+			srv.Router().ServeHTTP(w, req)
+
+			if w.Code != http.StatusNotImplemented {
+				t.Errorf("status = %d, want %d", w.Code, http.StatusNotImplemented)
+			}
+		})
+	}
+}
+
+// TestHandleGetMessage_EngineUnsupportedFallsBackToStore verifies that when
+// the configured engine reports the operation is unsupported, the handler
+// falls through to the store path so engine-only errors don't break detail
+// responses for engines that don't implement GetMessage.
+func TestHandleGetMessage_EngineUnsupportedFallsBackToStore(t *testing.T) {
+	engine := &querytest.MockEngine{
+		GetMessageFunc: func(_ context.Context, _ int64) (*query.MessageDetail, error) {
+			return nil, query.ErrNotImplemented
+		},
+	}
+	srv := newTestServerWithEngine(t, engine)
+
+	req := httptest.NewRequest("GET", "/api/v1/messages/1", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["subject"] != "Test Subject" {
+		t.Errorf("subject = %q, want %q (store path response)", resp["subject"], "Test Subject")
 	}
 }

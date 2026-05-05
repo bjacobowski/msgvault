@@ -50,6 +50,7 @@ type MessageDetail struct {
 	Snippet              string     `json:"snippet"`
 	SentAt               time.Time  `json:"sent_at"`
 	ReceivedAt           *time.Time `json:"received_at,omitempty"`
+	DeletedAt            *time.Time `json:"deleted_at,omitempty"` // When message was deleted from source (nil if not deleted)
 	SizeEstimate         int64      `json:"size_estimate"`
 	HasAttachments       bool       `json:"has_attachments"`
 

@@ -183,6 +183,43 @@ func extractBodyFromRawShared(ctx context.Context, db *sql.DB, tablePrefix strin
 	return parsed.GetBodyText(), nil
 }
 
+// getMessageRawShared retrieves and decompresses raw MIME data for a message.
+// Returns nil, nil if no raw data is stored, or if the message has been
+// deleted from source — the listing/search endpoints hide deleted-from-source
+// messages, so the raw-MIME path stays aligned and refuses to serve them.
+func getMessageRawShared(ctx context.Context, db *sql.DB, tablePrefix string, messageID int64) ([]byte, error) {
+	var compressed []byte
+	var compression sql.NullString
+
+	err := db.QueryRowContext(ctx, fmt.Sprintf(`
+		SELECT mr.raw_data, mr.compression
+		FROM %smessage_raw mr
+		JOIN %smessages m ON m.id = mr.message_id
+		WHERE mr.message_id = ? AND m.deleted_from_source_at IS NULL
+	`, tablePrefix, tablePrefix), messageID).Scan(&compressed, &compression)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query message_raw for id %d: %w", messageID, err)
+	}
+
+	if compression.Valid && compression.String == "zlib" {
+		r, err := zlib.NewReader(bytes.NewReader(compressed))
+		if err != nil {
+			return nil, fmt.Errorf("zlib reader for id %d: %w", messageID, err)
+		}
+		defer func() { _ = r.Close() }()
+		raw, err := io.ReadAll(r)
+		if err != nil {
+			return nil, fmt.Errorf("zlib decompress message_raw id %d: %w", messageID, err)
+		}
+		return raw, nil
+	}
+
+	return compressed, nil
+}
+
 // getMessageByQueryShared retrieves a full message detail by an arbitrary WHERE clause.
 // tablePrefix is "" for direct SQLite or "sqlite_db." for DuckDB's sqlite_scan.
 func getMessageByQueryShared(ctx context.Context, db *sql.DB, tablePrefix string, whereClause string, args ...interface{}) (*MessageDetail, error) {
@@ -198,14 +235,15 @@ func getMessageByQueryShared(ctx context.Context, db *sql.DB, tablePrefix string
 			m.received_at,
 			COALESCE(m.size_estimate, 0),
 			m.has_attachments,
-			COALESCE(m.rfc822_message_id, '')
+			COALESCE(m.rfc822_message_id, ''),
+			m.deleted_from_source_at
 		FROM %smessages m
 		LEFT JOIN %sconversations conv ON conv.id = m.conversation_id
 		WHERE %s
 	`, tablePrefix, tablePrefix, whereClause)
 
 	var msg MessageDetail
-	var sentAt, receivedAt sql.NullTime
+	var sentAt, receivedAt, deletedAt sql.NullTime
 	err := db.QueryRowContext(ctx, query, args...).Scan(
 		&msg.ID,
 		&msg.SourceMessageID,
@@ -218,6 +256,7 @@ func getMessageByQueryShared(ctx context.Context, db *sql.DB, tablePrefix string
 		&msg.SizeEstimate,
 		&msg.HasAttachments,
 		&msg.RFC822MessageID,
+		&deletedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -232,6 +271,10 @@ func getMessageByQueryShared(ctx context.Context, db *sql.DB, tablePrefix string
 	if receivedAt.Valid {
 		t := receivedAt.Time
 		msg.ReceivedAt = &t
+	}
+	if deletedAt.Valid {
+		t := deletedAt.Time
+		msg.DeletedAt = &t
 	}
 
 	// Fetch body from separate table (PK lookup, avoids scanning large body B-tree)

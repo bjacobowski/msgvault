@@ -569,6 +569,12 @@ func (e *Engine) GetMessageSummariesByIDs(ctx context.Context, ids []int64) ([]q
 	return out, nil
 }
 
+// GetMessageRaw returns raw MIME data for a message.
+// This operation is not supported in remote mode.
+func (e *Engine) GetMessageRaw(ctx context.Context, id int64) ([]byte, error) {
+	return nil, ErrNotSupported
+}
+
 // GetAttachment returns attachment metadata by ID.
 // This operation is not supported in remote mode.
 func (e *Engine) GetAttachment(ctx context.Context, id int64) (*query.AttachmentInfo, error) {
@@ -686,6 +692,10 @@ func (e *Engine) SearchFastWithStats(ctx context.Context, q *search.Query, query
 // GetGmailIDsByFilter returns Gmail message IDs matching a filter.
 // This operation is not supported in remote mode.
 func (e *Engine) GetGmailIDsByFilter(ctx context.Context, filter query.MessageFilter) ([]string, error) {
+	return nil, ErrNotSupported
+}
+
+func (e *Engine) SearchByDomains(ctx context.Context, domains []string, after, before *time.Time, limit, offset int) ([]query.MessageSummary, error) {
 	return nil, ErrNotSupported
 }
 
