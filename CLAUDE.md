@@ -118,6 +118,9 @@ make lint                     # Run linter
 ./msgvault-omgnos import-emlx --account me@gmail.com         # Specific account(s)
 ./msgvault-omgnos import-emlx /path/to/dir --identifier me@gmail.com  # Manual fallback
 
+# Facebook Messenger DYI import
+./msgvault-omgnos import-messenger --me you@facebook.messenger ~/facebook-dyi
+
 # Daemon mode (NAS/server deployment)
 ./msgvault-omgnos serve                                      # Start HTTP API + scheduled syncs
 
@@ -246,6 +249,10 @@ The TUI automatically builds/updates the Parquet cache on launch when new messag
 ```
 
 Sync is **read-only** - no modifications to Gmail.
+
+## Test Data
+
+Never use real people's names, email addresses, or identifiers in test fixtures. Use obviously synthetic names: `alice`, `bob`, `Test User`, `user@example.com`. Before committing test data, verify no real PII is present.
 
 ## Go Development
 

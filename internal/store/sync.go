@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -236,6 +237,30 @@ func (s *Store) GetActiveSync(sourceID int64) (*SyncRun, error) {
 	return run, err
 }
 
+// GetLatestCheckpointedSync returns the most recent sync run for a source if
+// (and only if) that latest run is running or failed and has a non-empty
+// cursor_before. A completed run after a failed one means the failed run's
+// checkpoint is stale: re-importing must re-scan all threads, so we return
+// no row in that case.
+func (s *Store) GetLatestCheckpointedSync(sourceID int64) (*SyncRun, error) {
+	row := s.db.QueryRow(`
+		SELECT id, source_id, started_at, completed_at, status,
+		       messages_processed, messages_added, messages_updated, errors_count,
+		       error_message, cursor_before, cursor_after
+		FROM sync_runs
+		WHERE source_id = ?
+		  AND id = (SELECT MAX(id) FROM sync_runs WHERE source_id = ?)
+		  AND status IN ('running', 'failed')
+		  AND cursor_before IS NOT NULL AND cursor_before != ''
+	`, sourceID, sourceID)
+
+	run, err := scanSyncRun(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return run, err
+}
+
 // HasAnyActiveSync returns true if any source currently has a running sync.
 // Use this as a safety gate before performing destructive file operations that
 // could race with concurrent attachment ingestion.
@@ -320,6 +345,28 @@ func (s *Store) GetOrCreateSource(sourceType, identifier string) (*Source, error
 		UpdatedAt:  time.Now(),
 	}
 	newSource.ID, _ = result.LastInsertId()
+
+	// Add to the default "All" collection if it exists.
+	//
+	// This runs as a separate Exec rather than inside a transaction
+	// with the source insert. If this Exec fails, the source row is
+	// committed but the All membership is missing — and the next
+	// EnsureDefaultCollection call (which runs in InitSchema on every
+	// process launch) re-adds every source not yet linked. Self-heals
+	// on next CLI invocation; until then collection-scoped reads of
+	// All would miss this source. Acceptable for a single-user tool;
+	// a future refactor can fold this into a withTx.
+	if _, err := s.db.Exec(
+		`INSERT OR IGNORE INTO collection_sources (collection_id, source_id)
+		 SELECT id, ? FROM collections WHERE name = ?`,
+		newSource.ID, DefaultCollectionName,
+	); err != nil {
+		slog.Warn("failed to add source to default collection (self-heals on next InitSchema)",
+			"source_id", newSource.ID,
+			"identifier", identifier,
+			"error", err,
+		)
+	}
 
 	return newSource, nil
 }
