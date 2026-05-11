@@ -327,3 +327,9 @@ func init() {
 	addAccountCmd.Flags().BoolVar(&noDefaultIdentityAddAccount, "no-default-identity", false, noDefaultIdentityHelp)
 	rootCmd.AddCommand(addAccountCmd)
 }
+
+// RegisterAddAccount registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterAddAccount(root *cobra.Command) {
+	root.AddCommand(addAccountCmd)}

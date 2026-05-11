@@ -397,3 +397,10 @@ func resolveSource(
 func init() {
 	rootCmd.AddCommand(newRemoveAccountCmd())
 }
+
+// RegisterRemoveAccount registers the remove-account command with the
+// given root. Uses the factory pattern because each invocation needs
+// its own cobra.Command instance.
+func RegisterRemoveAccount(root *cobra.Command) {
+	root.AddCommand(newRemoveAccountCmd())
+}

@@ -182,3 +182,9 @@ func init() {
 	exportAttachmentCmd.Flags().BoolVar(&exportAttachmentJSON, "json", false, "Output as JSON with base64-encoded data")
 	exportAttachmentCmd.Flags().BoolVar(&exportAttachmentBase64, "base64", false, "Output raw base64 to stdout")
 }
+
+// RegisterExportAttachment registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterExportAttachment(root *cobra.Command) {
+	root.AddCommand(exportAttachmentCmd)}

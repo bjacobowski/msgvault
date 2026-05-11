@@ -269,3 +269,9 @@ func init() {
 		"Output format: json, csv, or table",
 	)
 }
+
+// RegisterQuery registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterQuery(root *cobra.Command) {
+	root.AddCommand(queryCmd)}

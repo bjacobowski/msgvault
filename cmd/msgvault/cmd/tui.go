@@ -377,3 +377,9 @@ func init() {
 	tuiCmd.Flags().BoolVar(&forceLocalTUI, "local", false, "Force local database (override remote config)")
 	_ = tuiCmd.Flags().MarkHidden("no-sqlite-scanner")
 }
+
+// RegisterTUI registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterTUI(root *cobra.Command) {
+	root.AddCommand(tuiCmd)}

@@ -67,3 +67,9 @@ func init() {
 	rootCmd.AddCommand(listDomainsCmd)
 	addCommonAggregateFlags(listDomainsCmd)
 }
+
+// RegisterListDomains registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterListDomains(root *cobra.Command) {
+	root.AddCommand(listDomainsCmd)}

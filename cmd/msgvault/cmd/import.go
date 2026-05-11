@@ -278,3 +278,11 @@ func init() {
 	importCmd.Flags().StringVar(&importDisplayName, "display-name", "", "display name for the phone owner")
 	rootCmd.AddCommand(importCmd)
 }
+
+// RegisterImport registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterImport(root *cobra.Command) {
+	root.AddCommand(importCmd)
+	root.AddCommand(importWhatsappCmd)
+}

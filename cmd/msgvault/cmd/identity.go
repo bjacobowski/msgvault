@@ -417,3 +417,9 @@ func init() {
 		"Evidence signal name (e.g. manual, account-identifier, phone-e164). "+
 			"Cannot contain commas.")
 }
+
+// RegisterIdentity registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterIdentity(root *cobra.Command) {
+	root.AddCommand(identityCmd)}

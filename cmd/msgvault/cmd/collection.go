@@ -274,3 +274,9 @@ func init() {
 	collectionRemoveCmd.Flags().StringVar(&collectionRemoveAccounts,
 		"accounts", "", "Comma-separated account emails or source IDs")
 }
+
+// RegisterCollection registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterCollection(root *cobra.Command) {
+	root.AddCommand(collectionCmd)}

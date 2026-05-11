@@ -157,3 +157,9 @@ func init() {
 		"Show stats for all member accounts of one collection")
 	statsCmd.MarkFlagsMutuallyExclusive("account", "collection")
 }
+
+// RegisterStats registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterStats(root *cobra.Command) {
+	root.AddCommand(statsCmd)}

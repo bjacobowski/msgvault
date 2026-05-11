@@ -131,3 +131,9 @@ func init() {
 	rootCmd.AddCommand(exportEMLCmd)
 	exportEMLCmd.Flags().StringVarP(&exportEMLOutput, "output", "o", "", "Output file path (default: <source_message_id>.eml, use - for stdout)")
 }
+
+// RegisterExportEML registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterExportEML(root *cobra.Command) {
+	root.AddCommand(exportEMLCmd)}

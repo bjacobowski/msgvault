@@ -591,3 +591,9 @@ func init() {
 	syncFullCmd.Flags().IntVar(&syncLimit, "limit", 0, "Limit number of messages (for testing)")
 	rootCmd.AddCommand(syncFullCmd)
 }
+
+// RegisterSyncFull registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterSyncFull(root *cobra.Command) {
+	root.AddCommand(syncFullCmd)}

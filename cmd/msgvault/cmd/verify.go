@@ -345,3 +345,9 @@ func init() {
 	verifyCmd.Flags().BoolVar(&verifySkipDBCheck, "skip-db-check", false, "Skip SQLite integrity check")
 	rootCmd.AddCommand(verifyCmd)
 }
+
+// RegisterVerify registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterVerify(root *cobra.Command) {
+	root.AddCommand(verifyCmd)}
