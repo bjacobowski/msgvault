@@ -55,6 +55,14 @@ type Options struct {
 	// tests that want to avoid writing to disk.
 	FileDisabled bool
 
+	// StderrDisabled silences the stderr slog handler entirely.
+	// File logging (when enabled) continues unchanged so the audit
+	// trail is preserved. Wired by the `--quiet`/`-q` CLI flag for
+	// users who want a clean terminal for piping or visual reasons.
+	// Panic recovery and cobra error output still write directly to
+	// os.Stderr.
+	StderrDisabled bool
+
 	// LevelOverride, when non-nil, forces the level. Otherwise
 	// the level is taken from LevelString (config) and falls
 	// back to Info.
@@ -174,11 +182,15 @@ func BuildHandler(opts Options) (*Result, error) {
 
 	res := &Result{Level: level, RunID: newRunID()}
 
-	// Always build the stderr text handler.
-	stderrH := slog.NewTextHandler(stderr, &slog.HandlerOptions{
-		Level: level,
-	})
-	handlers := []slog.Handler{stderrH}
+	// Stderr text handler unless --quiet (StderrDisabled). A run
+	// with both StderrDisabled and FileDisabled true still ends up
+	// with a discard logger via the empty handlers slice below.
+	var handlers []slog.Handler
+	if !opts.StderrDisabled {
+		handlers = append(handlers, slog.NewTextHandler(stderr, &slog.HandlerOptions{
+			Level: level,
+		}))
+	}
 
 	// Best-effort file handler.
 	if !opts.FileDisabled && (opts.LogsDir != "" || opts.FilePath != "") {
@@ -227,9 +239,14 @@ func BuildHandler(opts Options) (*Result, error) {
 	}
 
 	var h slog.Handler
-	if len(handlers) == 1 {
+	switch len(handlers) {
+	case 0:
+		// Both stderr and file disabled. Use a discard handler so
+		// logger.Info etc. remain non-nil and panic-safe.
+		h = slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: level})
+	case 1:
 		h = handlers[0]
-	} else {
+	default:
 		h = newMultiHandler(handlers...)
 	}
 

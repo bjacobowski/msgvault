@@ -88,6 +88,56 @@ func TestBuildHandler_FileDisabledKeepsStderr(t *testing.T) {
 	}
 }
 
+func TestBuildHandler_StderrDisabledSuppressesStderr(t *testing.T) {
+	var stderr bytes.Buffer
+	res, err := BuildHandler(Options{
+		FileDisabled:   true,
+		StderrDisabled: true,
+		LevelString:    "info",
+		Stderr:         &stderr,
+	})
+	if err != nil {
+		t.Fatalf("BuildHandler: %v", err)
+	}
+	defer res.Close()
+
+	slog.New(res.Handler).Info("should-not-appear", "k", "v")
+	if stderr.Len() != 0 {
+		t.Errorf("expected stderr empty under StderrDisabled, got %q", stderr.String())
+	}
+}
+
+func TestBuildHandler_StderrDisabledKeepsFileLog(t *testing.T) {
+	dir := t.TempDir()
+	var stderr bytes.Buffer
+	res, err := BuildHandler(Options{
+		LogsDir:        dir,
+		StderrDisabled: true,
+		LevelString:    "info",
+		Stderr:         &stderr,
+		Now:            func() time.Time { return time.Date(2026, 5, 11, 0, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatalf("BuildHandler: %v", err)
+	}
+	defer res.Close()
+
+	slog.New(res.Handler).Info("file-only", "k", "v")
+	if stderr.Len() != 0 {
+		t.Errorf("stderr should be empty, got %q", stderr.String())
+	}
+	if res.FilePath == "" {
+		t.Fatal("expected FilePath set even with StderrDisabled")
+	}
+	body, err := os.ReadFile(res.FilePath)
+	if err != nil {
+		t.Fatalf("read log file: %v", err)
+	}
+	if !strings.Contains(string(body), "file-only") {
+		t.Errorf("log file missing record: %q", body)
+	}
+}
+
 func TestBuildHandler_LevelOverrideBeatsLevelString(t *testing.T) {
 	var stderr bytes.Buffer
 	debug := slog.LevelDebug

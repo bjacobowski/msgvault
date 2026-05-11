@@ -24,6 +24,7 @@ var (
 	cfgFile    string
 	homeDir    string
 	verbose    bool
+	quiet      bool // --quiet / -q: silence the stderr slog stream
 	useLocal   bool // Force local database even when remote is configured
 	logFile    string
 	logLevel   string
@@ -96,11 +97,12 @@ in a single binary.`,
 		}
 
 		logResult, err = logging.BuildHandler(logging.Options{
-			LogsDir:       logsDir,
-			FilePath:      logFile,
-			FileDisabled:  fileDisabled,
-			LevelOverride: levelOverride,
-			LevelString:   levelString,
+			LogsDir:        logsDir,
+			FilePath:       logFile,
+			FileDisabled:   fileDisabled,
+			StderrDisabled: quiet,
+			LevelOverride:  levelOverride,
+			LevelString:    levelString,
 		})
 		if err != nil {
 			return fmt.Errorf("build logger: %w", err)
@@ -489,6 +491,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: ~/.msgvault/config.toml)")
 	rootCmd.PersistentFlags().StringVar(&homeDir, "home", "", "home directory (overrides MSGVAULT_HOME)")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output (implies --log-level=debug)")
+	rootCmd.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false, "suppress stderr log lines (file logging unchanged)")
 	rootCmd.PersistentFlags().BoolVar(&useLocal, "local", false, "force local database (override remote config)")
 	rootCmd.PersistentFlags().StringVar(&logFile, "log-file", "",
 		"override log file path (default: <data dir>/logs/msgvault-YYYY-MM-DD.log)")
