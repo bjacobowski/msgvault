@@ -187,6 +187,11 @@ type Model struct {
 	inlineSearchDebounce uint64 // Increment to cancel pending debounce timers
 	inlineSearchLoading  bool   // True when a debounced search query is in-flight
 
+	// Goto-by-id state (`:` opens an inline ID-lookup bar)
+	gotoInput     textinput.Model // Text input for ID to jump to
+	gotoActive    bool            // True when goto bar is open
+	gotoRequestID uint64          // Increments per goto submission; ignore stale results
+
 	// Pre-search snapshot: cached message list state before search began,
 	// so Esc can restore instantly without re-querying.
 	preSearchMessages     []query.MessageSummary
@@ -217,6 +222,11 @@ func New(engine query.Engine, opts Options) Model {
 	ti.Placeholder = "search (Tab: deep)"
 	ti.CharLimit = 200
 	ti.Width = 50
+
+	gotoTI := textinput.New()
+	gotoTI.Placeholder = "id, gmail-hex, or t:<id>"
+	gotoTI.CharLimit = 64
+	gotoTI.Width = 40
 
 	aggLimit := opts.AggregateLimit
 	if aggLimit == 0 {
@@ -262,6 +272,7 @@ func New(engine query.Engine, opts Options) Model {
 		},
 		searchInput: ti,
 		searchMode:  searchModeFast,
+		gotoInput:   gotoTI,
 	}
 }
 
