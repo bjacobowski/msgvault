@@ -151,9 +151,14 @@ func printStats(s *store.Stats) {
 }
 
 func init() {
-	rootCmd.AddCommand(statsCmd)
 	statsCmd.Flags().StringVar(&statsAccount, "account", "", "Show stats for a specific account")
 	statsCmd.Flags().StringVar(&statsCollection, "collection", "",
 		"Show stats for all member accounts of one collection")
 	statsCmd.MarkFlagsMutuallyExclusive("account", "collection")
 }
+
+// RegisterStats registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterStats(root *cobra.Command) {
+	root.AddCommand(statsCmd)}

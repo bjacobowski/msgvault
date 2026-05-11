@@ -56,7 +56,6 @@ func init() {
 	exportTokenCmd.Flags().StringVar(&exportTokenTo, "to", "", "Remote msgvault URL (or MSGVAULT_REMOTE_URL env var)")
 	exportTokenCmd.Flags().StringVar(&exportTokenAPIKey, "api-key", "", "API key (or MSGVAULT_REMOTE_API_KEY env var)")
 	exportTokenCmd.Flags().BoolVar(&exportAllowInsecure, "allow-insecure", false, "Allow HTTP (insecure) connections for trusted networks")
-	rootCmd.AddCommand(exportTokenCmd)
 }
 
 // tokenExporter uploads OAuth tokens to a remote msgvault server.
@@ -297,3 +296,9 @@ func sanitizeExportTokenPath(tokensDir, email string) string {
 
 	return cleanPath
 }
+
+// RegisterExportToken registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterExportToken(root *cobra.Command) {
+	root.AddCommand(exportTokenCmd)}

@@ -363,5 +363,10 @@ func init() {
 		"read every log file in the logs directory, not just today's")
 	logsCmd.Flags().BoolVar(&logsPath, "path", false,
 		"print the log directory path and exit")
-	rootCmd.AddCommand(logsCmd)
 }
+
+// RegisterLogs registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterLogs(root *cobra.Command) {
+	root.AddCommand(logsCmd)}

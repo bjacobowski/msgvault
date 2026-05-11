@@ -152,5 +152,10 @@ func init() {
 	importMessengerCmd.Flags().BoolVar(&importMessengerNoResume, "no-resume", false, "ignore any existing checkpoint and start fresh")
 	importMessengerCmd.Flags().IntVar(&importMessengerCheckpointEvery, "checkpoint-interval", 200, "checkpoint every N messages")
 	_ = importMessengerCmd.MarkFlagRequired("me")
-	rootCmd.AddCommand(importMessengerCmd)
 }
+
+// RegisterImportMessenger registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterImportMessenger(root *cobra.Command) {
+	root.AddCommand(importMessengerCmd)}

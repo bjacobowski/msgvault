@@ -133,7 +133,6 @@ Add to Claude Desktop config:
 }
 
 func init() {
-	rootCmd.AddCommand(mcpCmd)
 	mcpCmd.Flags().BoolVar(&mcpForceSQL, "force-sql", false, "Force SQLite queries instead of Parquet")
 	mcpCmd.Flags().BoolVar(&mcpNoSQLiteScanner, "no-sqlite-scanner", false, "Disable DuckDB sqlite_scanner extension (use direct SQLite fallback)")
 	mcpCmd.Flags().StringVar(&mcpHTTPAddr, "http", "",
@@ -213,3 +212,9 @@ func isLoopbackHost(host string) bool {
 	}
 	return false
 }
+
+// RegisterMCP registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterMCP(root *cobra.Command) {
+	root.AddCommand(mcpCmd)}

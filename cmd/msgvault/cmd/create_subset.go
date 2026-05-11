@@ -40,7 +40,6 @@ func init() {
 	)
 	_ = createSubsetCmd.MarkFlagRequired("output")
 	_ = createSubsetCmd.MarkFlagRequired("rows")
-	rootCmd.AddCommand(createSubsetCmd)
 }
 
 func runCreateSubset(cmd *cobra.Command, _ []string) error {
@@ -98,3 +97,9 @@ func runCreateSubset(cmd *cobra.Command, _ []string) error {
 
 	return nil
 }
+
+// RegisterCreateSubset registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterCreateSubset(root *cobra.Command) {
+	root.AddCommand(createSubsetCmd)}

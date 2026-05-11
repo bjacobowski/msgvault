@@ -64,6 +64,11 @@ Examples:
 }
 
 func init() {
-	rootCmd.AddCommand(listSendersCmd)
 	addCommonAggregateFlags(listSendersCmd)
 }
+
+// RegisterListSenders registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterListSenders(root *cobra.Command) {
+	root.AddCommand(listSendersCmd)}

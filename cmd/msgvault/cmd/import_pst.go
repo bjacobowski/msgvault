@@ -154,7 +154,6 @@ Examples:
 }
 
 func init() {
-	rootCmd.AddCommand(importPstCmd)
 
 	importPstCmd.Flags().StringVar(&importPstSourceType, "source-type", "pst", "Source type recorded in the database")
 	importPstCmd.Flags().StringArrayVar(&importPstSkipFolders, "skip-folder", nil, "Folder name to skip (repeatable, case-insensitive)")
@@ -162,3 +161,9 @@ func init() {
 	importPstCmd.Flags().IntVar(&importPstCheckpointInterval, "checkpoint-interval", 200, "Save progress every N messages")
 	importPstCmd.Flags().BoolVar(&importPstNoAttachments, "no-attachments", false, "Do not store attachments to disk (messages are still imported)")
 }
+
+// RegisterImportPst registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterImportPst(root *cobra.Command) {
+	root.AddCommand(importPstCmd)}

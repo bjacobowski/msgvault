@@ -370,10 +370,15 @@ func cacheNeedsBuild(dbPath, analyticsDir string) cacheStaleness {
 }
 
 func init() {
-	rootCmd.AddCommand(tuiCmd)
 	tuiCmd.Flags().BoolVar(&forceSQL, "force-sql", false, "Force SQLite queries instead of Parquet (slow for large archives)")
 	tuiCmd.Flags().BoolVar(&skipCacheBuild, "no-cache-build", false, "Skip automatic cache build/update")
 	tuiCmd.Flags().BoolVar(&noSQLiteScanner, "no-sqlite-scanner", false, "Disable DuckDB sqlite_scanner extension (use direct SQLite fallback)")
 	tuiCmd.Flags().BoolVar(&forceLocalTUI, "local", false, "Force local database (override remote config)")
 	_ = tuiCmd.Flags().MarkHidden("no-sqlite-scanner")
 }
+
+// RegisterTUI registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterTUI(root *cobra.Command) {
+	root.AddCommand(tuiCmd)}

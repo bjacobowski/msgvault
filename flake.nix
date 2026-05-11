@@ -22,20 +22,29 @@
       });
     in
     {
-      packages = forAllSystems (pkgs: {
-        default = (pkgs.buildGoModule.override { go = goPinned pkgs; }) {
-          pname = "msgvault";
-          version = "0.14.1";
-          src = ./.;
-          vendorHash = "sha256-rhijudB9WzFKtLAhfpuPw3osbo2lymTw1V+ZjuVyigU=";
-          proxyVendor = true;
-          subPackages = [ "cmd/msgvault" ];
-          tags = [ "fts5" ];
-          ldflags = [
-            "-X github.com/wesm/msgvault/cmd/msgvault/cmd.Version=nix-dev"
-          ];
-        };
-      });
+      packages = forAllSystems (pkgs:
+        let
+          buildBinary = subPackage: pname: (pkgs.buildGoModule.override { go = goPinned pkgs; }) {
+            inherit pname;
+            version = "0.14.1";
+            src = ./.;
+            vendorHash = "sha256-rhijudB9WzFKtLAhfpuPw3osbo2lymTw1V+ZjuVyigU=";
+            proxyVendor = true;
+            subPackages = [ subPackage ];
+            tags = [ "fts5" ];
+            ldflags = [
+              "-X github.com/wesm/msgvault/cmd/msgvault/cmd.Version=nix-dev"
+            ];
+          };
+        in
+        {
+          # Full-surface human binary
+          msgvault-omgnos = buildBinary "cmd/msgvault" "msgvault-omgnos";
+          # Read-only agent binary
+          msgvault-agent = buildBinary "cmd/msgvault-agent" "msgvault-agent";
+          # `nix build` with no target builds the full-surface binary
+          default = buildBinary "cmd/msgvault" "msgvault-omgnos";
+        });
 
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {

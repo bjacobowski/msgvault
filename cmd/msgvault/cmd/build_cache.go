@@ -821,7 +821,17 @@ func rebuildCacheAfterWrite(dbPath string) {
 }
 
 func init() {
-	rootCmd.AddCommand(buildCacheCmd)
-	rootCmd.AddCommand(cacheStatsCmd)
 	buildCacheCmd.Flags().BoolVar(&fullRebuild, "full-rebuild", false, "Rebuild all cache files from scratch")
 }
+
+// RegisterBuildCache registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterBuildCache(root *cobra.Command) {
+	root.AddCommand(buildCacheCmd)}
+
+// RegisterCacheStats registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterCacheStats(root *cobra.Command) {
+	root.AddCommand(cacheStatsCmd)}

@@ -343,6 +343,11 @@ func outputRemoteMessageJSON(msg *store.APIMessage) error {
 }
 
 func init() {
-	rootCmd.AddCommand(showMessageCmd)
 	showMessageCmd.Flags().BoolVar(&showMessageJSON, "json", false, "Output as JSON")
 }
+
+// RegisterShowMessage registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterShowMessage(root *cobra.Command) {
+	root.AddCommand(showMessageCmd)}

@@ -59,6 +59,11 @@ Examples:
 }
 
 func init() {
-	rootCmd.AddCommand(updateAccountCmd)
 	updateAccountCmd.Flags().StringVar(&updateDisplayName, "display-name", "", "Set the display name for the account")
 }
+
+// RegisterUpdateAccount registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterUpdateAccount(root *cobra.Command) {
+	root.AddCommand(updateAccountCmd)}

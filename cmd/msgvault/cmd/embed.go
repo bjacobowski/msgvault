@@ -34,7 +34,12 @@ to point at a running OpenAI-compatible endpoint.`,
 }
 
 func init() {
-	rootCmd.AddCommand(embedCmd)
 	embedCmd.Flags().BoolVar(&embedFullRebuild, "full-rebuild", false, "Create a new generation and rebuild from scratch")
 	embedCmd.Flags().BoolVar(&embedYes, "yes", false, "Skip confirmation prompts")
 }
+
+// RegisterEmbed registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterEmbed(root *cobra.Command) {
+	root.AddCommand(embedCmd)}

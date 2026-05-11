@@ -134,7 +134,12 @@ func runExportAttachments(cmd *cobra.Command, args []string) error {
 }
 
 func init() {
-	rootCmd.AddCommand(exportAttachmentsCmd)
 	exportAttachmentsCmd.Flags().StringVarP(&exportAttachmentsOutput, "output", "o", "",
 		"Output directory (default: current directory)")
 }
+
+// RegisterExportAttachments registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterExportAttachments(root *cobra.Command) {
+	root.AddCommand(exportAttachmentsCmd)}

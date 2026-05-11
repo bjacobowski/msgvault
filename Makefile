@@ -27,24 +27,45 @@ EXEEXT :=
 endif
 
 BIN := msgvault-omgnos$(EXEEXT)
+AGENT_BIN := msgvault-agent$(EXEEXT)
 
-.PHONY: build build-release install clean test test-v fmt lint lint-ci tidy shootout run-shootout install-hooks bench help
+.PHONY: build build-omgnos build-agent build-release install install-omgnos install-agent clean test test-v fmt lint lint-ci tidy shootout run-shootout install-hooks bench help
 
-# Build the binary (debug)
-build:
+# Build both binaries (debug)
+build: build-omgnos build-agent
+
+# Build only the full-surface (human) binary
+build-omgnos:
 	CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS)" -o $(BIN) ./cmd/msgvault
 	@chmod +x $(BIN)
 
-# Build with optimizations (release)
+# Build only the read-only agent binary
+build-agent:
+	CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS)" -o $(AGENT_BIN) ./cmd/msgvault-agent
+	@chmod +x $(AGENT_BIN)
+
+# Build with optimizations (release) — full surface only by convention
 build-release:
 	CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS_RELEASE)" -trimpath -o $(BIN) ./cmd/msgvault
 	@chmod +x $(BIN)
+	CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS_RELEASE)" -trimpath -o $(AGENT_BIN) ./cmd/msgvault-agent
+	@chmod +x $(AGENT_BIN)
 
-# Install to ~/.local/bin, $GOBIN, or $GOPATH/bin
-install:
+# Install both binaries to ~/.local/bin, $GOBIN, or $GOPATH/bin
+install: install-omgnos install-agent
+
+install-omgnos:
+	@$(MAKE) _install BIN_NAME=$(BIN) BIN_PATH=./cmd/msgvault
+
+install-agent:
+	@$(MAKE) _install BIN_NAME=$(AGENT_BIN) BIN_PATH=./cmd/msgvault-agent
+
+# Internal: shared install logic. Callers pass BIN_NAME and BIN_PATH.
+.PHONY: _install
+_install:
 	@if [ -d "$(HOME)/.local/bin" ]; then \
-		echo "Installing to ~/.local/bin/$(BIN)"; \
-		CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS)" -o "$(HOME)/.local/bin/$(BIN)" ./cmd/msgvault; \
+		echo "Installing to ~/.local/bin/$(BIN_NAME)"; \
+		CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS)" -o "$(HOME)/.local/bin/$(BIN_NAME)" $(BIN_PATH); \
 	else \
 		INSTALL_DIR="$${GOBIN:-$$(go env GOBIN)}"; \
 		if [ -z "$$INSTALL_DIR" ]; then \
@@ -52,13 +73,13 @@ install:
 			INSTALL_DIR="$$GOPATH_FIRST/bin"; \
 		fi; \
 		mkdir -p "$$INSTALL_DIR"; \
-		echo "Installing to $$INSTALL_DIR/$(BIN)"; \
-		CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS)" -o "$$INSTALL_DIR/$(BIN)" ./cmd/msgvault; \
+		echo "Installing to $$INSTALL_DIR/$(BIN_NAME)"; \
+		CGO_ENABLED=1 go build -tags "$(BUILD_TAGS)" -ldflags="$(LDFLAGS)" -o "$$INSTALL_DIR/$(BIN_NAME)" $(BIN_PATH); \
 	fi
 
 # Clean build artifacts
 clean:
-	rm -f msgvault-omgnos msgvault-omgnos.exe mimeshootout
+	rm -f msgvault-omgnos msgvault-omgnos.exe msgvault-agent msgvault-agent.exe mimeshootout
 	rm -rf bin/
 
 # Run tests
@@ -135,9 +156,13 @@ run-shootout: shootout
 help:
 	@echo "msgvault build targets:"
 	@echo ""
-	@echo "  build          - Debug build"
-	@echo "  build-release  - Release build (optimized, stripped)"
-	@echo "  install        - Install to ~/.local/bin or GOPATH"
+	@echo "  build          - Debug build (both binaries)"
+	@echo "  build-omgnos   - Debug build (full-surface binary only)"
+	@echo "  build-agent    - Debug build (read-only agent binary only)"
+	@echo "  build-release  - Release build (both, optimized + stripped)"
+	@echo "  install        - Install both binaries to ~/.local/bin or GOPATH"
+	@echo "  install-omgnos - Install the full-surface binary only"
+	@echo "  install-agent  - Install the read-only agent binary only"
 	@echo ""
 	@echo "  test           - Run tests"
 	@echo "  test-v         - Run tests (verbose)"

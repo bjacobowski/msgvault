@@ -713,5 +713,10 @@ func (r *byteReader) Read(p []byte) (n int, err error) {
 }
 
 func init() {
-	rootCmd.AddCommand(repairEncodingCmd)
 }
+
+// RegisterRepairEncoding registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterRepairEncoding(root *cobra.Command) {
+	root.AddCommand(repairEncodingCmd)}

@@ -170,5 +170,10 @@ func init() {
 	addO365Cmd.Flags().StringVar(&o365TenantID, "tenant", "",
 		"Azure AD tenant ID (default: \"common\" for multi-tenant)")
 	addO365Cmd.Flags().BoolVar(&noDefaultIdentityAddO365, "no-default-identity", false, noDefaultIdentityHelp)
-	rootCmd.AddCommand(addO365Cmd)
 }
+
+// RegisterAddO365 registers the command(s) defined in this file
+// with the given root command. The agent and full-surface binaries
+// call this to opt this command in.
+func RegisterAddO365(root *cobra.Command) {
+	root.AddCommand(addO365Cmd)}
