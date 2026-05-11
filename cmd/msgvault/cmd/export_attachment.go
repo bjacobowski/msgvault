@@ -94,9 +94,10 @@ func exportAttachmentAsJSON(storagePath, contentHash string) error {
 	}
 
 	output := map[string]any{
-		"content_hash": contentHash,
-		"size":         len(data),
-		"data_base64":  base64.StdEncoding.EncodeToString(data),
+		"schema_version": SchemaVersion,
+		"content_hash":   contentHash,
+		"size":           len(data),
+		"data_base64":    base64.StdEncoding.EncodeToString(data),
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")

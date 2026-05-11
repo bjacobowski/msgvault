@@ -319,6 +319,7 @@ func outputHybridResultsJSON(results []hybridResultRow, meta hybrid.ResultMeta, 
 		rows[i] = row
 	}
 	return printJSON(map[string]any{
+		"schema_version": SchemaVersion,
 		"generation": map[string]any{
 			"id":          int64(meta.Generation.ID),
 			"model":       meta.Generation.Model,

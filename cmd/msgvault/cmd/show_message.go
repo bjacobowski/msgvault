@@ -239,6 +239,7 @@ func outputMessageJSON(msg *query.MessageDetail) error {
 	if msg.ReceivedAt != nil {
 		output["received_at"] = msg.ReceivedAt.Format(time.RFC3339)
 	}
+	output["schema_version"] = SchemaVersion
 
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
@@ -324,6 +325,7 @@ func outputRemoteMessageJSON(msg *store.APIMessage) error {
 	}
 
 	output := map[string]interface{}{
+		"schema_version":  SchemaVersion,
 		"id":              msg.ID,
 		"subject":         msg.Subject,
 		"snippet":         msg.Snippet,
