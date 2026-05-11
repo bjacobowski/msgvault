@@ -1218,6 +1218,7 @@ var rawHelpLines = []string{
 	"",
 	"Other",
 	"  /           Search",
+	"  :           Goto by ID (numeric, gmail-hex, or t:<id> for thread)",
 	"  A           Select account",
 	"  f           Filter (attachments, deleted)",
 	"  e           Export attachments (in message view)",
