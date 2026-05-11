@@ -379,8 +379,9 @@ func outputRemoteSearchResultsTable(results []store.APIMessage, total int64) err
 
 func outputRemoteSearchResultsJSON(results []store.APIMessage, total int64) error {
 	return printJSON(map[string]interface{}{
-		"total":   total,
-		"results": results,
+		"schema_version": SchemaVersion,
+		"total":          total,
+		"results":        results,
 	})
 }
 

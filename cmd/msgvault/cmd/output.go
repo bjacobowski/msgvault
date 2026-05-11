@@ -131,6 +131,17 @@ func printJSON(v any) error {
 	return enc.Encode(v)
 }
 
+// SchemaVersion is the contract version stamped onto object-shaped
+// CLI JSON responses (search-by-domains, show-message, query, hybrid
+// search results, export-attachment, etc.). Consumers that read
+// msgvault JSON output should validate this field before parsing.
+//
+// Array-shaped responses (search, list-*, identity list) are
+// unversioned; consumers treat them as v1 by convention. Adding
+// versioning to those endpoints later requires a wrapper object,
+// which would be a breaking change deferred until needed.
+const SchemaVersion = 1
+
 func truncate(s string, max int) string {
 	if len(s) <= max {
 		return s

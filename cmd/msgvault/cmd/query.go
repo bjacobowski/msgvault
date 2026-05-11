@@ -187,10 +187,11 @@ func scanRow(
 func writeJSON(
 	w io.Writer, cols []string, rows [][]any,
 ) error {
-	result := query.QueryResult{
-		Columns:  cols,
-		Rows:     rows,
-		RowCount: len(rows),
+	result := map[string]any{
+		"schema_version": SchemaVersion,
+		"columns":        cols,
+		"rows":           rows,
+		"row_count":      len(rows),
 	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
