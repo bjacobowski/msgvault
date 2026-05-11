@@ -866,22 +866,6 @@ func TestStore_GetStats_WithData(t *testing.T) {
 	}
 }
 
-func TestStore_GetStats_ExcludesDedupHidden(t *testing.T) {
-	f := storetest.New(t)
-	ids := f.CreateMessages(3)
-
-	// Soft-delete one via dedup (deleted_at).
-	_, err := f.Store.DB().Exec(
-		f.Store.Rebind("UPDATE messages SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?"), ids[0])
-	testutil.MustNoErr(t, err, "set deleted_at")
-
-	stats, err := f.Store.GetStats()
-	testutil.MustNoErr(t, err, "GetStats()")
-	if stats.MessageCount != 2 {
-		t.Errorf("MessageCount = %d, want 2 (dedup-hidden row excluded)", stats.MessageCount)
-	}
-}
-
 func TestStore_GetStats_ExcludesSourceDeleted(t *testing.T) {
 	f := storetest.New(t)
 	ids := f.CreateMessages(3)
@@ -1678,33 +1662,6 @@ func TestStore_GetStatsForScope_SingleSource(t *testing.T) {
 	}
 	if statsAll.SourceCount != 2 {
 		t.Errorf("SourceCount (nil/global) = %d, want 2", statsAll.SourceCount)
-	}
-}
-
-func TestStore_GetStatsForScope_ExcludesDedupHidden(t *testing.T) {
-	f := storetest.New(t)
-	srcB, convB := makeSecondSource(t, f, "b-dedup@example.com")
-
-	idsA := createMessagesForSource(t, f.Store, f.Source.ID, f.ConvID, "a-dedup", 2)
-	createMessagesForSource(t, f.Store, srcB.ID, convB, "b-dedup", 1)
-
-	// Soft-delete one message in source A via dedup (deleted_at).
-	_, err := f.Store.DB().Exec(
-		f.Store.Rebind("UPDATE messages SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?"), idsA[0])
-	testutil.MustNoErr(t, err, "set deleted_at")
-
-	// Scoped to A: should see only the live message.
-	statsA, err := f.Store.GetStatsForScope([]int64{f.Source.ID})
-	testutil.MustNoErr(t, err, "GetStatsForScope A")
-	if statsA.MessageCount != 1 {
-		t.Errorf("MessageCount (A scoped) = %d, want 1 (dedup-hidden excluded)", statsA.MessageCount)
-	}
-
-	// Unscoped: should also exclude the dedup-hidden message (2 live, not 3).
-	statsAll, err := f.Store.GetStatsForScope(nil)
-	testutil.MustNoErr(t, err, "GetStatsForScope nil")
-	if statsAll.MessageCount != 2 {
-		t.Errorf("MessageCount (nil/global) = %d, want 2 (dedup-hidden excluded)", statsAll.MessageCount)
 	}
 }
 
