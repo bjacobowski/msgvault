@@ -432,10 +432,12 @@ func (m Model) aggregateTableView() string {
 		sb.WriteString("\n")
 	}
 
-	// Info line - show inline search bar when active, search filter when searching, otherwise blank
+	// Info line - show goto bar, inline search bar, or search filter
 	var infoContent string
 	isLoading := m.loading || m.inlineSearchLoading || m.searchLoadingMore
-	if m.inlineSearchActive {
+	if m.gotoActive {
+		infoContent = ":" + m.gotoInput.View()
+	} else if m.inlineSearchActive {
 		infoContent = "/" + m.searchInput.View()
 	} else if m.searchQuery != "" {
 		infoContent = fmt.Sprintf(" Search: %q", m.searchQuery)
@@ -617,10 +619,12 @@ func (m Model) messageListView() string {
 		sb.WriteString("\n")
 	}
 
-	// Info line - show inline search bar when active, search info when searching, otherwise blank
+	// Info line - show goto bar, inline search bar, or search info
 	var infoContent string
 	isLoading := m.loading || m.inlineSearchLoading || m.searchLoadingMore
-	if m.inlineSearchActive {
+	if m.gotoActive {
+		infoContent = ":" + m.gotoInput.View()
+	} else if m.inlineSearchActive {
 		modeTag := "[Fast]"
 		if m.searchMode == searchModeDeep {
 			modeTag = "[Deep]"
@@ -819,8 +823,10 @@ func (m Model) messageDetailView() string {
 		sb.WriteString("\n")
 	}
 
-	// Notification line - show detail search bar, flash, loading, or blank
-	if m.detailSearchActive {
+	// Notification line - show goto bar, detail search bar, flash, loading, or blank
+	if m.gotoActive {
+		sb.WriteString(m.renderInfoLine(":"+m.gotoInput.View(), false))
+	} else if m.detailSearchActive {
 		infoContent := "/" + m.detailSearchInput.View()
 		sb.WriteString(m.renderInfoLine(infoContent, false))
 	} else if m.detailSearchQuery != "" {
@@ -963,8 +969,12 @@ func (m Model) threadView() string {
 		sb.WriteString("\n")
 	}
 
-	// Notification line - show flash, loading indicator, or blank
-	sb.WriteString(m.renderNotificationLine())
+	// Notification line - show goto bar, flash, loading indicator, or blank
+	if m.gotoActive {
+		sb.WriteString(m.renderInfoLine(":"+m.gotoInput.View(), false))
+	} else {
+		sb.WriteString(m.renderNotificationLine())
+	}
 
 	// Overlay modal if active
 	if m.modal != modalNone {
@@ -1208,6 +1218,7 @@ var rawHelpLines = []string{
 	"",
 	"Other",
 	"  /           Search",
+	"  :           Goto by ID (numeric, gmail-hex, or t:<id> for thread)",
 	"  A           Select account",
 	"  f           Filter (attachments, deleted)",
 	"  e           Export attachments (in message view)",
