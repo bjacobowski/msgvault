@@ -311,7 +311,6 @@ func runIncrementalSync(ctx context.Context, s *store.Store, getOAuthMgr func(st
 }
 
 func init() {
-	rootCmd.AddCommand(syncIncrementalCmd)
 }
 
 // RegisterSync registers the command(s) defined in this file

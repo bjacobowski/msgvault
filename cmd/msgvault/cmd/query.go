@@ -79,10 +79,18 @@ Examples:
 
 // executeQuery opens an in-memory DuckDB, registers views over
 // the Parquet files in analyticsDir, runs the SQL, and writes
-// the results in the requested format.
+// the results in the requested format. When IsAgentMode() is true
+// the user SQL is restricted to read-only statements and the DuckDB
+// session is locked down against filesystem writes.
 func executeQuery(
 	analyticsDir, sqlStr, format string, w io.Writer,
 ) error {
+	if IsAgentMode() {
+		if err := validateAgentSQL(sqlStr); err != nil {
+			return err
+		}
+	}
+
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
 		return fmt.Errorf("open duckdb: %w", err)
@@ -100,6 +108,24 @@ func executeQuery(
 
 	if err := query.RegisterViews(db, analyticsDir); err != nil {
 		return fmt.Errorf("register views: %w", err)
+	}
+
+	if IsAgentMode() {
+		// Block network egress (HTTPFileSystem, S3FileSystem) and
+		// any further config changes. LocalFileSystem stays enabled
+		// so Parquet view reads still work; protection against
+		// COPY ... TO 'file' is enforced by validateAgentSQL above.
+		// Order matters: SET disabled_filesystems must run after
+		// RegisterViews so view DDL completes, then lock_configuration
+		// freezes the session against the user's own SET attempts.
+		if _, err := db.Exec(
+			"SET disabled_filesystems = 'HTTPFileSystem,S3FileSystem'",
+		); err != nil {
+			return fmt.Errorf("agent-mode lockdown: %w", err)
+		}
+		if _, err := db.Exec("SET lock_configuration = true"); err != nil {
+			return fmt.Errorf("agent-mode lock: %w", err)
+		}
 	}
 
 	rows, err := db.Query(sqlStr)
@@ -263,7 +289,6 @@ func writeTable(
 }
 
 func init() {
-	rootCmd.AddCommand(queryCmd)
 	queryCmd.Flags().StringVar(
 		&queryFormat, "format", "json",
 		"Output format: json, csv, or table",
@@ -274,4 +299,169 @@ func init() {
 // with the given root command. The agent and full-surface binaries
 // call this to opt this command in.
 func RegisterQuery(root *cobra.Command) {
-	root.AddCommand(queryCmd)}
+	root.AddCommand(queryCmd)
+}
+
+// agentReadVerbs are SQL statement-leading keywords accepted in
+// agent mode. Any other leading verb (or a WITH-CTE that contains a
+// banned keyword as a word) is rejected before the SQL ever reaches
+// DuckDB.
+var agentReadVerbs = map[string]bool{
+	"select":    true,
+	"with":      true,
+	"explain":   true,
+	"show":      true,
+	"describe":  true,
+	"summarize": true,
+}
+
+// agentBannedKeywords are SQL keywords that must not appear anywhere
+// in a WITH-prefixed statement. CTEs can be used with DML in DuckDB
+// (e.g. WITH t AS (…) INSERT INTO …), so the leading-verb check
+// alone is insufficient when the verb is WITH.
+var agentBannedKeywords = []string{
+	"insert", "update", "delete", "merge", "upsert",
+	"create", "drop", "alter", "truncate", "rename",
+	"copy", "export", "import",
+	"attach", "detach", "install", "load",
+	"set", "reset", "pragma", "vacuum", "checkpoint",
+}
+
+// validateAgentSQL rejects any SQL that isn't read-only. It strips
+// line and block comments, requires a single statement (no internal
+// semicolons), checks the first keyword against agentReadVerbs, and
+// for WITH-prefixed statements scans for banned keywords as
+// word-boundary matches in the remainder.
+func validateAgentSQL(sqlStr string) error {
+	stripped := stripSQLComments(sqlStr)
+	stripped = strings.TrimSpace(stripped)
+	if stripped == "" {
+		return fmt.Errorf("empty SQL statement")
+	}
+
+	// Reject multi-statement input. Trailing ';' is fine but anything
+	// between two non-whitespace runs is not.
+	trimmed := strings.TrimRight(stripped, "; \t\n\r")
+	if strings.ContainsRune(trimmed, ';') {
+		return fmt.Errorf("agent mode rejects multi-statement input")
+	}
+
+	first := strings.ToLower(firstWord(trimmed))
+	if !agentReadVerbs[first] {
+		return fmt.Errorf(
+			"agent mode rejects %q: only %s statements are allowed",
+			first, agentReadVerbsList(),
+		)
+	}
+
+	if first == "with" {
+		lower := strings.ToLower(trimmed)
+		for _, bad := range agentBannedKeywords {
+			if containsWord(lower, bad) {
+				return fmt.Errorf(
+					"agent mode rejects WITH-statement: contains banned keyword %q",
+					bad,
+				)
+			}
+		}
+	}
+
+	return nil
+}
+
+// stripSQLComments removes -- line comments and /* … */ block
+// comments. Comments inside string literals are left alone; this is
+// adequate for the simple agent-mode allowlist check (an attacker
+// who can craft a string literal that hides a banned keyword still
+// has to get past the first-word check).
+func stripSQLComments(s string) string {
+	var out strings.Builder
+	out.Grow(len(s))
+	i := 0
+	inStr := byte(0)
+	for i < len(s) {
+		c := s[i]
+		if inStr != 0 {
+			out.WriteByte(c)
+			if c == inStr && (i == 0 || s[i-1] != '\\') {
+				inStr = 0
+			}
+			i++
+			continue
+		}
+		if c == '\'' || c == '"' {
+			inStr = c
+			out.WriteByte(c)
+			i++
+			continue
+		}
+		if c == '-' && i+1 < len(s) && s[i+1] == '-' {
+			for i < len(s) && s[i] != '\n' {
+				i++
+			}
+			continue
+		}
+		if c == '/' && i+1 < len(s) && s[i+1] == '*' {
+			i += 2
+			for i+1 < len(s) && !(s[i] == '*' && s[i+1] == '/') {
+				i++
+			}
+			i += 2
+			continue
+		}
+		out.WriteByte(c)
+		i++
+	}
+	return out.String()
+}
+
+func firstWord(s string) string {
+	for i, c := range s {
+		if c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '(' {
+			return s[:i]
+		}
+	}
+	return s
+}
+
+func containsWord(s, word string) bool {
+	for {
+		idx := strings.Index(s, word)
+		if idx == -1 {
+			return false
+		}
+		left := idx == 0 || !isIdentChar(s[idx-1])
+		right := idx+len(word) == len(s) || !isIdentChar(s[idx+len(word)])
+		if left && right {
+			return true
+		}
+		s = s[idx+len(word):]
+	}
+}
+
+func isIdentChar(c byte) bool {
+	return (c >= 'a' && c <= 'z') ||
+		(c >= 'A' && c <= 'Z') ||
+		(c >= '0' && c <= '9') ||
+		c == '_'
+}
+
+func agentReadVerbsList() string {
+	verbs := make([]string, 0, len(agentReadVerbs))
+	for v := range agentReadVerbs {
+		verbs = append(verbs, strings.ToUpper(v))
+	}
+	// Stable order so error messages are deterministic in tests.
+	sortedJoin := strings.Join(sortStrings(verbs), ", ")
+	return sortedJoin
+}
+
+func sortStrings(in []string) []string {
+	out := append([]string(nil), in...)
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j-1] > out[j]; j-- {
+			out[j-1], out[j] = out[j], out[j-1]
+		}
+	}
+	return out
+}

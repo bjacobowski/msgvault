@@ -53,7 +53,6 @@ created if they don't already exist.`,
 }
 
 func init() {
-	rootCmd.AddCommand(initDBCmd)
 }
 
 // RegisterInitDB registers the command(s) defined in this file

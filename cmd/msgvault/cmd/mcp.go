@@ -133,7 +133,6 @@ Add to Claude Desktop config:
 }
 
 func init() {
-	rootCmd.AddCommand(mcpCmd)
 	mcpCmd.Flags().BoolVar(&mcpForceSQL, "force-sql", false, "Force SQLite queries instead of Parquet")
 	mcpCmd.Flags().BoolVar(&mcpNoSQLiteScanner, "no-sqlite-scanner", false, "Disable DuckDB sqlite_scanner extension (use direct SQLite fallback)")
 	mcpCmd.Flags().StringVar(&mcpHTTPAddr, "http", "",

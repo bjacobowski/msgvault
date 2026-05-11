@@ -343,7 +343,6 @@ func isFTSIntegrityError(msg string) bool {
 func init() {
 	verifyCmd.Flags().IntVar(&verifySampleSize, "sample", 100, "Number of messages to sample for MIME verification")
 	verifyCmd.Flags().BoolVar(&verifySkipDBCheck, "skip-db-check", false, "Skip SQLite integrity check")
-	rootCmd.AddCommand(verifyCmd)
 }
 
 // RegisterVerify registers the command(s) defined in this file

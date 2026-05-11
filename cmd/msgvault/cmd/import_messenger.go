@@ -152,7 +152,6 @@ func init() {
 	importMessengerCmd.Flags().BoolVar(&importMessengerNoResume, "no-resume", false, "ignore any existing checkpoint and start fresh")
 	importMessengerCmd.Flags().IntVar(&importMessengerCheckpointEvery, "checkpoint-interval", 200, "checkpoint every N messages")
 	_ = importMessengerCmd.MarkFlagRequired("me")
-	rootCmd.AddCommand(importMessengerCmd)
 }
 
 // RegisterImportMessenger registers the command(s) defined in this file

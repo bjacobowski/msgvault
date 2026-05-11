@@ -30,7 +30,6 @@ Run this once after installing msgvault to get started quickly.`,
 }
 
 func init() {
-	rootCmd.AddCommand(setupCmd)
 }
 
 func runSetup(cmd *cobra.Command, args []string) error {

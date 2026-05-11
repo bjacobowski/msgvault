@@ -259,7 +259,6 @@ func resolveAccountList(st *store.Store, accounts string) ([]int64, error) {
 }
 
 func init() {
-	rootCmd.AddCommand(collectionCmd)
 	collectionCmd.AddCommand(collectionCreateCmd)
 	collectionCmd.AddCommand(collectionListCmd)
 	collectionCmd.AddCommand(collectionShowCmd)

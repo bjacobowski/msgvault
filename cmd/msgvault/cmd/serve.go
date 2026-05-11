@@ -53,7 +53,6 @@ Use Ctrl+C to stop the daemon gracefully.`,
 }
 
 func init() {
-	rootCmd.AddCommand(serveCmd)
 }
 
 func runServe(cmd *cobra.Command, args []string) error {

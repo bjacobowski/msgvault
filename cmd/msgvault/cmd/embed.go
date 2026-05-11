@@ -34,7 +34,6 @@ to point at a running OpenAI-compatible endpoint.`,
 }
 
 func init() {
-	rootCmd.AddCommand(embedCmd)
 	embedCmd.Flags().BoolVar(&embedFullRebuild, "full-rebuild", false, "Create a new generation and rebuild from scratch")
 	embedCmd.Flags().BoolVar(&embedYes, "yes", false, "Skip confirmation prompts")
 }

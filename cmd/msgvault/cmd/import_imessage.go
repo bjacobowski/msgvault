@@ -299,7 +299,6 @@ func init() {
 		&importImessageMe, "me", "",
 		"your phone/email for recipient tracking (default: source identifier 'local')",
 	)
-	rootCmd.AddCommand(importImessageCmd)
 }
 
 // RegisterImportImessage registers the command(s) defined in this file

@@ -214,6 +214,40 @@ func recoverAndLogPanic() {
 	os.Exit(2)
 }
 
+// SetIdentity overrides the root command's Use, Short, and Long
+// fields. Both binaries' main() call this before Execute to give
+// their root the correct name in help output and usage strings.
+func SetIdentity(use, short, long string) {
+	rootCmd.Use = use
+	rootCmd.Short = short
+	rootCmd.Long = long
+}
+
+// RootCmd exposes the package-global root command so each binary's
+// main() can pass it to the Register* functions.
+func RootCmd() *cobra.Command {
+	return rootCmd
+}
+
+// agentMode is set by EnableAgentMode and checked by commands that
+// need to apply additional restrictions when running as part of the
+// msgvault-agent binary. Currently only `query` consults it (to apply
+// read-only DuckDB guardrails).
+var agentMode bool
+
+// EnableAgentMode signals that this binary is the read-only agent
+// variant. Commands that have agent-mode-specific behavior gate it
+// on IsAgentMode(). Called once from cmd/msgvault-agent/main.go
+// before Execute.
+func EnableAgentMode() {
+	agentMode = true
+}
+
+// IsAgentMode reports whether EnableAgentMode has been called.
+func IsAgentMode() bool {
+	return agentMode
+}
+
 // Execute runs the root command with a background context.
 // Prefer ExecuteContext for signal-aware execution.
 func Execute() error {

@@ -395,7 +395,6 @@ func resolveSource(
 }
 
 func init() {
-	rootCmd.AddCommand(newRemoveAccountCmd())
 }
 
 // RegisterRemoveAccount registers the remove-account command with the

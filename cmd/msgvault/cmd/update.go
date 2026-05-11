@@ -110,7 +110,6 @@ func init() {
 	updateCmd.Flags().Bool("check", false, "only check for updates, don't install")
 	updateCmd.Flags().BoolP("yes", "y", false, "skip confirmation prompt")
 	updateCmd.Flags().BoolP("force", "f", false, "replace dev build with latest official release")
-	rootCmd.AddCommand(updateCmd)
 }
 
 // RegisterUpdate registers the command(s) defined in this file

@@ -40,7 +40,6 @@ func init() {
 	)
 	_ = createSubsetCmd.MarkFlagRequired("output")
 	_ = createSubsetCmd.MarkFlagRequired("rows")
-	rootCmd.AddCommand(createSubsetCmd)
 }
 
 func runCreateSubset(cmd *cobra.Command, _ []string) error {

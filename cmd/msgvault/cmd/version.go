@@ -27,7 +27,6 @@ var versionCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(versionCmd)
 }
 
 // RegisterVersion registers the command(s) defined in this file

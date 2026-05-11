@@ -128,7 +128,6 @@ func runExportEML(cmd *cobra.Command, messageRef, outputPath string) error {
 }
 
 func init() {
-	rootCmd.AddCommand(exportEMLCmd)
 	exportEMLCmd.Flags().StringVarP(&exportEMLOutput, "output", "o", "", "Output file path (default: <source_message_id>.eml, use - for stdout)")
 }
 

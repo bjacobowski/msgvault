@@ -151,7 +151,6 @@ func printStats(s *store.Stats) {
 }
 
 func init() {
-	rootCmd.AddCommand(statsCmd)
 	statsCmd.Flags().StringVar(&statsAccount, "account", "", "Show stats for a specific account")
 	statsCmd.Flags().StringVar(&statsCollection, "collection", "",
 		"Show stats for all member accounts of one collection")

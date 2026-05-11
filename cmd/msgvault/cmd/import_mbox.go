@@ -368,7 +368,6 @@ Examples:
 }
 
 func init() {
-	rootCmd.AddCommand(importMboxCmd)
 
 	importMboxCmd.Flags().StringVar(&importMboxSourceType, "source-type", "mbox", "Source type to record in the database (e.g. mbox, hey)")
 	importMboxCmd.Flags().StringSliceVar(&importMboxLabels, "label", nil, "Label(s) to apply to imported messages (repeatable, or comma-separated)")

@@ -459,7 +459,6 @@ func printImportStats(out io.Writer, summary importer.EmlxImportSummary) {
 }
 
 func init() {
-	rootCmd.AddCommand(importEmlxCmd)
 
 	importEmlxCmd.Flags().StringVar(
 		&importEmlxSourceType, "source-type", "apple-mail",

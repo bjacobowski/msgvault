@@ -154,7 +154,6 @@ Examples:
 }
 
 func init() {
-	rootCmd.AddCommand(importPstCmd)
 
 	importPstCmd.Flags().StringVar(&importPstSourceType, "source-type", "pst", "Source type recorded in the database")
 	importPstCmd.Flags().StringArrayVar(&importPstSkipFolders, "skip-folder", nil, "Folder name to skip (repeatable, case-insensitive)")

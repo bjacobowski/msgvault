@@ -245,7 +245,6 @@ func init() {
 	addIMAPCmd.Flags().BoolVar(&imapNoTLS, "no-tls", false, "Disable TLS (plain connection, not recommended)")
 	addIMAPCmd.Flags().BoolVar(&imapSTARTTLS, "starttls", false, "Use STARTTLS instead of implicit TLS")
 	addIMAPCmd.Flags().BoolVar(&noDefaultIdentityAddImap, "no-default-identity", false, noDefaultIdentityHelp)
-	rootCmd.AddCommand(addIMAPCmd)
 }
 
 // RegisterAddIMAP registers the command(s) defined in this file

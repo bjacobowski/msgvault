@@ -26,7 +26,6 @@ Example:
 }
 
 func init() {
-	rootCmd.AddCommand(quickstartCmd)
 }
 
 // RegisterQuickstart registers the command(s) defined in this file

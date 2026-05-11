@@ -230,7 +230,6 @@ func outputRemoteAccountsJSON(accounts []remote.AccountInfo) error {
 }
 
 func init() {
-	rootCmd.AddCommand(listAccountsCmd)
 	listAccountsCmd.Flags().BoolVar(&listAccountsJSON, "json", false, "Output as JSON")
 }
 

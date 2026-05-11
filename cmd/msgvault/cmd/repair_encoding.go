@@ -713,7 +713,6 @@ func (r *byteReader) Read(p []byte) (n int, err error) {
 }
 
 func init() {
-	rootCmd.AddCommand(repairEncodingCmd)
 }
 
 // RegisterRepairEncoding registers the command(s) defined in this file

@@ -821,8 +821,6 @@ func rebuildCacheAfterWrite(dbPath string) {
 }
 
 func init() {
-	rootCmd.AddCommand(buildCacheCmd)
-	rootCmd.AddCommand(cacheStatsCmd)
 	buildCacheCmd.Flags().BoolVar(&fullRebuild, "full-rebuild", false, "Rebuild all cache files from scratch")
 }
 

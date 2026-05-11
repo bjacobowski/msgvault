@@ -53,7 +53,6 @@ PowerShell:
 }
 
 func init() {
-	rootCmd.AddCommand(completionCmd)
 }
 
 // RegisterCompletion registers the command(s) defined in this file

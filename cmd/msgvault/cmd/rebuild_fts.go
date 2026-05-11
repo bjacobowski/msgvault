@@ -72,7 +72,6 @@ MCP clients before running this command — it needs an exclusive write lock.`,
 }
 
 func init() {
-	rootCmd.AddCommand(rebuildFTSCmd)
 }
 
 // RegisterRebuildFTS registers the command(s) defined in this file

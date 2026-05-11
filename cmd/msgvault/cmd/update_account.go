@@ -59,7 +59,6 @@ Examples:
 }
 
 func init() {
-	rootCmd.AddCommand(updateAccountCmd)
 	updateAccountCmd.Flags().StringVar(&updateDisplayName, "display-name", "", "Set the display name for the account")
 }
 

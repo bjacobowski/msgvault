@@ -134,7 +134,6 @@ func runExportAttachments(cmd *cobra.Command, args []string) error {
 }
 
 func init() {
-	rootCmd.AddCommand(exportAttachmentsCmd)
 	exportAttachmentsCmd.Flags().StringVarP(&exportAttachmentsOutput, "output", "o", "",
 		"Output directory (default: current directory)")
 }

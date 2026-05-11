@@ -211,7 +211,6 @@ func init() {
 		&noDefaultIdentityImportGVoice, "no-default-identity", false,
 		noDefaultIdentityHelp,
 	)
-	rootCmd.AddCommand(importGvoiceCmd)
 }
 
 // RegisterImportGvoice registers the command(s) defined in this file

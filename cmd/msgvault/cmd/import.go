@@ -267,7 +267,6 @@ func init() {
 	importWhatsappCmd.Flags().StringVar(&importDisplayName, "display-name", "", "display name for the phone owner")
 	importWhatsappCmd.Flags().BoolVar(&noDefaultIdentityImportWhatsApp, "no-default-identity", false, noDefaultIdentityHelp)
 	_ = importWhatsappCmd.MarkFlagRequired("phone")
-	rootCmd.AddCommand(importWhatsappCmd)
 
 	// Deprecated "import --type whatsapp" alias
 	importCmd.Flags().StringVar(&importType, "type", "", "import source type")
@@ -276,7 +275,6 @@ func init() {
 	importCmd.Flags().StringVar(&importContacts, "contacts", "", "path to contacts .vcf file")
 	importCmd.Flags().IntVar(&importLimit, "limit", 0, "limit number of messages")
 	importCmd.Flags().StringVar(&importDisplayName, "display-name", "", "display name for the phone owner")
-	rootCmd.AddCommand(importCmd)
 }
 
 // RegisterImport registers the command(s) defined in this file

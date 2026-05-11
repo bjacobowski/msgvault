@@ -363,7 +363,6 @@ func init() {
 		"read every log file in the logs directory, not just today's")
 	logsCmd.Flags().BoolVar(&logsPath, "path", false,
 		"print the log directory path and exit")
-	rootCmd.AddCommand(logsCmd)
 }
 
 // RegisterLogs registers the command(s) defined in this file

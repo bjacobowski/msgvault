@@ -343,7 +343,6 @@ func outputRemoteMessageJSON(msg *store.APIMessage) error {
 }
 
 func init() {
-	rootCmd.AddCommand(showMessageCmd)
 	showMessageCmd.Flags().BoolVar(&showMessageJSON, "json", false, "Output as JSON")
 }
 

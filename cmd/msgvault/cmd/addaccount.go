@@ -325,7 +325,6 @@ func init() {
 	addAccountCmd.Flags().StringVar(&accountDisplayName, "display-name", "", "Display name for the account (e.g., \"Work\", \"Personal\")")
 	addAccountCmd.Flags().StringVar(&oauthAppName, "oauth-app", "", "Named OAuth app from config (for Google Workspace orgs)")
 	addAccountCmd.Flags().BoolVar(&noDefaultIdentityAddAccount, "no-default-identity", false, noDefaultIdentityHelp)
-	rootCmd.AddCommand(addAccountCmd)
 }
 
 // RegisterAddAccount registers the command(s) defined in this file

@@ -64,7 +64,6 @@ Examples:
 }
 
 func init() {
-	rootCmd.AddCommand(listLabelsCmd)
 	addCommonAggregateFlags(listLabelsCmd)
 }
 
