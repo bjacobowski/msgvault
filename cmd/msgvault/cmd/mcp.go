@@ -26,7 +26,7 @@ var mcpCmd = &cobra.Command{
 
 This allows Claude Desktop (or any MCP client) to query your email archive
 using tools like search_messages, get_message, list_messages, get_stats,
-aggregate, and stage_deletion.
+and aggregate.
 
 Add to Claude Desktop config:
   {

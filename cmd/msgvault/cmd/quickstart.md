@@ -193,50 +193,6 @@ msgvault export-eml 12345 --output message.eml
 Exports the raw MIME data as a standard `.eml` file compatible with most email
 clients.
 
-## Deletion management
-
-Messages are staged for deletion in the TUI (select messages, press `d`).
-Staged deletions are stored as manifests and must be explicitly executed.
-
-```bash
-# List all deletion batches (pending, in-progress, completed, failed)
-msgvault list-deletions
-
-# Show details of a specific batch
-msgvault show-deletion <batch-id>
-
-# Cancel a pending batch
-msgvault cancel-deletion <batch-id>
-
-# List staged batches without executing (always allowed)
-msgvault delete-staged --list
-
-# Execute pending deletions (gated; default = trash, recoverable for 30 days)
-MSGVAULT_ENABLE_REMOTE_DELETE=1 msgvault delete-staged --yes
-
-# Execute a specific batch
-MSGVAULT_ENABLE_REMOTE_DELETE=1 msgvault delete-staged <batch-id>
-
-# Permanently delete via batch API (fast, no recovery — opt-in)
-MSGVAULT_ENABLE_REMOTE_DELETE=1 msgvault delete-staged --permanent
-
-# Dry run — show what would be deleted without doing it (always allowed)
-msgvault delete-staged --dry-run
-
-# Specify which account to delete from
-MSGVAULT_ENABLE_REMOTE_DELETE=1 msgvault delete-staged --account user@gmail.com
-```
-
-**Note:** Remote deletion is gated for the v1 release. Staging, listing,
-inspecting, and dry-running deletion batches works without the gate;
-executing against Gmail requires `MSGVAULT_ENABLE_REMOTE_DELETE=1` in the
-environment.
-
-**Warning:** `delete-staged --permanent` permanently deletes messages from
-Gmail with no Gmail-side recovery. The default mode moves messages to Gmail
-trash, which is recoverable for 30 days. Always verify with `--dry-run`
-first regardless of mode.
-
 ## Verify archive integrity
 
 ```bash
@@ -287,7 +243,7 @@ url = "http://nas.local:8080"
 api_key = "your-api-key"
 ```
 
-In remote mode, deletion staging and attachment export are disabled for safety.
+In remote mode, attachment export is disabled for safety.
 
 ### TUI keybindings
 
@@ -307,8 +263,6 @@ In remote mode, deletion staging and attachment export are disabled for safety.
 | `Space`          | Toggle selection                                |
 | `A`              | Select all visible                              |
 | `x`              | Clear selection                                 |
-| `d`              | Stage selected for deletion                     |
-| `D`              | Stage all matching current filter for deletion  |
 | `?`              | Help                                            |
 | `q`              | Quit                                            |
 
@@ -328,5 +282,4 @@ In remote mode, deletion staging and attachment export are disabled for safety.
 - Date filters use `YYYY-MM-DD` format.
 - Relative date units: `d` (days), `w` (weeks), `m` (months), `y` (years).
 - All query/search commands are read-only and never modify data.
-- Deletion requires explicit staging (TUI) + execution (`delete-staged`).
 - Use `--verbose` (`-v`) on any command for debug logging.

@@ -452,10 +452,11 @@ func TestInitSchema_MigratesOAuthAppColumn(t *testing.T) {
 // TestInitSchema_AddsDeletedAtToLegacyMessagesTable verifies the
 // upgrade-path migration: a database whose `messages` table already has
 // every other column the embedded schema indexes reference, but is
-// missing the dedup-hide column `deleted_at`, gets the column added by
-// InitSchema. Without the ALTER, every read path that references
-// `deleted_at` (LiveMessagesWhere, the dedup engine, the cache
-// staleness check) fails on upgraded databases with "no such column".
+// missing the vestigial soft-delete columns (`deleted_at`,
+// `delete_batch_id`), gets them added by InitSchema. The columns are
+// vestigial — left over from the now-removed dedup feature — but the
+// ALTER statements stay so DBs created against the legacy schema still
+// migrate cleanly.
 func TestInitSchema_AddsDeletedAtToLegacyMessagesTable(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "legacy.db")
 	st, err := store.Open(dbPath)
@@ -467,8 +468,8 @@ func TestInitSchema_AddsDeletedAtToLegacyMessagesTable(t *testing.T) {
 	// Build a messages table that has every column the embedded
 	// schema's CREATE INDEX statements reference (sender_id,
 	// deleted_from_source_at, message_type, …) but DOES NOT have the
-	// new dedup-hide columns (`deleted_at`, `delete_batch_id`).
-	// Approximates a legacy DB just before this branch landed.
+	// vestigial soft-delete columns (`deleted_at`, `delete_batch_id`).
+	// Approximates a legacy DB.
 	if _, err := st.DB().Exec(`
 		CREATE TABLE messages (
 			id INTEGER PRIMARY KEY,
@@ -509,8 +510,7 @@ func TestInitSchema_AddsDeletedAtToLegacyMessagesTable(t *testing.T) {
 	}
 
 	// Confirm the canonical live-messages predicate runs without
-	// "no such column": this is the failure mode codex flagged. The
-	// query uses both deleted_at and deleted_from_source_at.
+	// "no such column".
 	var n int
 	if err := st.DB().QueryRow(
 		"SELECT COUNT(*) FROM messages WHERE " + store.LiveMessagesWhere("", true),
@@ -521,11 +521,11 @@ func TestInitSchema_AddsDeletedAtToLegacyMessagesTable(t *testing.T) {
 		t.Errorf("post-migration live count = %d, want 1", n)
 	}
 
-	// Confirm delete_batch_id is also queryable post-migration so
-	// DeleteAllDeduped's distinct-batch count works on upgraded DBs.
+	// Confirm delete_batch_id and deleted_at are also queryable
+	// post-migration so vestigial schema reads don't break.
 	if _, err := st.DB().Exec(
-		"SELECT COUNT(DISTINCT delete_batch_id) FROM messages",
+		"SELECT COUNT(deleted_at), COUNT(delete_batch_id) FROM messages",
 	); err != nil {
-		t.Fatalf("post-migration delete_batch_id query: %v", err)
+		t.Fatalf("post-migration vestigial-column query: %v", err)
 	}
 }

@@ -1359,3 +1359,21 @@ func (s *Store) UpsertAttachment(messageID int64, filename, mimeType, storagePat
 	`, s.dialect.Now()), messageID, filename, mimeType, storagePath, contentHash, size)
 	return err
 }
+
+// CountActiveMessages counts live (not source-deleted) messages,
+// optionally restricted to one or more source IDs.
+func (s *Store) CountActiveMessages(sourceIDs ...int64) (int64, error) {
+	query := "SELECT COUNT(*) FROM messages WHERE " + LiveMessagesWhere("", true)
+	var args []any
+	if len(sourceIDs) > 0 {
+		placeholders := make([]string, len(sourceIDs))
+		for i, id := range sourceIDs {
+			placeholders[i] = "?"
+			args = append(args, id)
+		}
+		query += " AND source_id IN (" + strings.Join(placeholders, ",") + ")"
+	}
+	var count int64
+	err := s.db.QueryRow(query, args...).Scan(&count)
+	return count, err
+}

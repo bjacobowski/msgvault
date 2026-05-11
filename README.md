@@ -173,7 +173,7 @@ Workspace admins can use a Google service account with domain-wide delegation in
 service_account_key = "/secure/path/service-account.json"
 ```
 
-In Google Admin Console, authorize the service account client for `https://www.googleapis.com/auth/gmail.readonly` and `https://www.googleapis.com/auth/gmail.modify`. If you will run `delete-staged` with permanent deletion, also authorize `https://mail.google.com/`. Keep the key file owner-only, for example `chmod 600 /secure/path/service-account.json`.
+In Google Admin Console, authorize the service account client for `https://www.googleapis.com/auth/gmail.readonly` and `https://www.googleapis.com/auth/gmail.modify`. Keep the key file owner-only, for example `chmod 600 /secure/path/service-account.json`.
 
 ```bash
 msgvault add-account you@acme.com --oauth-app acme

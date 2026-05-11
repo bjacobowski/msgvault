@@ -209,16 +209,6 @@ func (m Model) handleAggregateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.loadRequestID++
 		return m, m.loadMessages()
 
-	case "d", "D": // Stage for deletion (selection or current row)
-		if m.isRemote {
-			return m.showFlash("Deletion not available in remote mode")
-		}
-		if !m.hasSelection() && len(m.rows) > 0 && m.cursor < len(m.rows) {
-			// No selection - select current row first
-			m.selection.aggregateKeys[m.rows[m.cursor].Key] = true
-		}
-		return m.stageForDeletion()
-
 	// Drill down - go to message list for selected aggregate
 	case "enter":
 		if len(m.rows) > 0 && m.cursor < len(m.rows) {
@@ -387,16 +377,6 @@ func (m Model) handleMessageListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "x": // Clear selection
 		m.clearAllSelections()
-
-	case "d", "D": // Stage for deletion (selection or current row)
-		if m.isRemote {
-			return m.showFlash("Deletion not available in remote mode")
-		}
-		if !m.hasSelection() && len(m.messages) > 0 && m.cursor < len(m.messages) {
-			// No selection - select current row first
-			m.selection.messageIDs[m.messages[m.cursor].ID] = true
-		}
-		return m.stageForDeletion()
 
 	// Attachment filter
 	case "f":
@@ -902,10 +882,6 @@ func (m Model) handleThreadViewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleModalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.modal {
-	case modalDeleteConfirm:
-		return m.handleDeleteConfirmKeys(msg)
-	case modalDeleteResult:
-		return m.handleDeleteResultKeys()
 	case modalQuitConfirm:
 		return m.handleQuitConfirmKeys(msg)
 	case modalAccountSelector:
@@ -921,24 +897,6 @@ func (m Model) handleModalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case modalHelp:
 		return m.handleHelpKeys(msg)
 	}
-	return m, nil
-}
-
-func (m Model) handleDeleteConfirmKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "y", "Y":
-		return m.confirmDeletion()
-	case "n", "N", "esc":
-		m.modal = modalNone
-		m.pendingManifest = nil
-	}
-	return m, nil
-}
-
-func (m Model) handleDeleteResultKeys() (tea.Model, tea.Cmd) {
-	// Any key dismisses the result
-	m.modal = modalNone
-	m.modalResult = ""
 	return m, nil
 }
 

@@ -80,34 +80,6 @@ func openTextSearchDB(t *testing.T) (*sql.DB, int64) {
 	return db, msgID
 }
 
-func TestSQLiteEngine_TextSearch_ExcludesDedupHidden(t *testing.T) {
-	db, msgID := openTextSearchDB(t)
-	engine := NewSQLiteEngine(db)
-	ctx := context.Background()
-
-	// Confirm the message appears before deletion.
-	results, err := engine.TextSearch(ctx, "hello", 10, 0)
-	if err != nil {
-		t.Fatalf("TextSearch before delete: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("want 1 result before delete, got %d", len(results))
-	}
-
-	// Soft-delete via dedup (deleted_at).
-	if _, err := db.Exec(`UPDATE messages SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?`, msgID); err != nil {
-		t.Fatalf("set deleted_at: %v", err)
-	}
-
-	results, err = engine.TextSearch(ctx, "hello", 10, 0)
-	if err != nil {
-		t.Fatalf("TextSearch after dedup delete: %v", err)
-	}
-	if len(results) != 0 {
-		t.Errorf("want 0 results after dedup delete, got %d", len(results))
-	}
-}
-
 func TestSQLiteEngine_TextSearch_ExcludesSourceDeleted(t *testing.T) {
 	db, msgID := openTextSearchDB(t)
 	engine := NewSQLiteEngine(db)

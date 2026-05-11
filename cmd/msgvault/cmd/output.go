@@ -130,3 +130,10 @@ func printJSON(v any) error {
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
 }
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max-3] + "..."
+}

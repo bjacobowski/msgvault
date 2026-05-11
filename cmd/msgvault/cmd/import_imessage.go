@@ -122,12 +122,12 @@ func runImportImessage(cmd *cobra.Command, _ []string) error {
 }
 
 func openStoreAndInit() (*store.Store, error) {
-	// Shared by 15 commands (deduplicate, identity, collection,
-	// import-imessage/gvoice, delete-deduped, …). store.Open + InitSchema
-	// create the database file on first use, which is the right behavior
-	// for a freshly-installed CLI: a missing file is not an error here.
-	// init-db remains the explicit setup command for users who want to
-	// pre-create the DB.
+	// Shared by many commands (identity, collection,
+	// import-imessage/gvoice, …). store.Open + InitSchema create the
+	// database file on first use, which is the right behavior for a
+	// freshly-installed CLI: a missing file is not an error here.
+	// init-db remains the explicit setup command for users who want
+	// to pre-create the DB.
 	return openStoreAndInitWith(runStartupMigrations)
 }
 

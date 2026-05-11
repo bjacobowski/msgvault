@@ -39,8 +39,7 @@ type APIAttachment struct {
 // ListMessages returns a paginated list of messages with batch-loaded recipients and labels.
 func (s *Store) ListMessages(offset, limit int) ([]APIMessage, int64, error) {
 	// Get total count. Use the canonical live-messages predicate so
-	// dedup-hidden rows (deleted_at) are excluded alongside source-
-	// deleted rows.
+	// source-deleted rows are excluded.
 	var total int64
 	err := s.db.QueryRow(
 		"SELECT COUNT(*) FROM messages WHERE " + LiveMessagesWhere("", true),
