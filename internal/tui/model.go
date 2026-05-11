@@ -1322,6 +1322,11 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleModalKeys(msg)
 	}
 
+	// Handle goto bar (takes priority over view; mutually exclusive with inline search)
+	if m.gotoActive {
+		return m.handleGotoKeys(msg)
+	}
+
 	// Handle inline search (takes priority over view)
 	if m.inlineSearchActive {
 		return m.handleInlineSearchKeys(msg)

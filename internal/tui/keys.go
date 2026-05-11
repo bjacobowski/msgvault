@@ -81,6 +81,45 @@ func (m Model) handleInlineSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+// handleGotoKeys handles keys when the goto-by-id bar is active.
+// Enter commits the lookup (handled in commitGoto, step 3 wires it),
+// Esc cancels and clears the input.
+func (m Model) handleGotoKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		return m.commitGoto()
+
+	case "esc":
+		return m.cancelGoto()
+
+	case "ctrl+c":
+		m.quitting = true
+		return m, tea.Quit
+
+	default:
+		var cmd tea.Cmd
+		m.gotoInput, cmd = m.gotoInput.Update(msg)
+		return m, cmd
+	}
+}
+
+// openGoto activates the goto-by-id input bar with an empty value.
+// Callers from each view-level handler invoke this on `:`.
+func (m Model) openGoto() (tea.Model, tea.Cmd) {
+	m.gotoActive = true
+	m.gotoInput.SetValue("")
+	m.gotoInput.Focus()
+	return m, nil
+}
+
+// cancelGoto closes the goto bar without performing a lookup.
+func (m Model) cancelGoto() (tea.Model, tea.Cmd) {
+	m.gotoActive = false
+	m.gotoInput.Blur()
+	m.gotoInput.SetValue("")
+	return m, nil
+}
+
 // handleGlobalKeys handles keys common to all views (quit, help, mode toggle).
 // Returns (model, cmd, true) if the key was handled, or (model, nil, false) otherwise.
 func (m Model) handleGlobalKeys(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
@@ -167,6 +206,10 @@ func (m Model) handleAggregateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Search - activate inline search bar
 	case "/":
 		return m, m.activateInlineSearch("search")
+
+	// Goto by ID - activate goto bar
+	case ":":
+		return m.openGoto()
 
 	// Selection
 	case " ": // Space to toggle selection
@@ -386,6 +429,10 @@ func (m Model) handleMessageListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Search - activate inline search bar
 	case "/":
 		return m, m.activateInlineSearch("search (Tab: deep)")
+
+	// Goto by ID - activate goto bar
+	case ":":
+		return m.openGoto()
 
 	// Sub-grouping: switch to aggregate breakdown within current filter
 	case "tab":
@@ -670,6 +717,10 @@ func (m Model) handleMessageDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.goBack()
 
+	// Goto by ID - activate goto bar
+	case ":":
+		return m.openGoto()
+
 	// Detail search
 	case "/":
 		m.detailSearchActive = true
@@ -813,6 +864,10 @@ func (m Model) handleThreadViewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Back to previous view
 	case "esc":
 		return m.goBack()
+
+	// Goto by ID - activate goto bar
+	case ":":
+		return m.openGoto()
 
 	// Navigation
 	case "up", "k":
@@ -1278,6 +1333,13 @@ func (m Model) commitInlineSearch() (tea.Model, tea.Cmd) {
 	}
 	// In aggregate views, results already showing from debounced search
 	return m, nil
+}
+
+// commitGoto closes the goto bar and (in step 3+) dispatches the
+// ID lookup. For step 2 it just closes the bar; lookup wiring lands
+// next.
+func (m Model) commitGoto() (tea.Model, tea.Cmd) {
+	return m.cancelGoto()
 }
 
 // cancelInlineSearch cancels the search and restores previous state.
