@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -806,6 +807,50 @@ func (m Model) loadMessageDetail(id int64) tea.Cmd {
 	)
 }
 
+// gotoResultMsg carries the outcome of a goto-by-id lookup. Step 4
+// adds the toThread flag so a `t:<id>` input lands on the thread view
+// instead of the detail view.
+type gotoResultMsg struct {
+	detail    *query.MessageDetail
+	err       error
+	requestID uint64
+	toThread  bool
+}
+
+// loadGoto resolves the goto-bar input asynchronously. It tries
+// strconv.ParseInt first (numeric internal ID), then falls back to
+// GetMessageBySourceID (Gmail hex). toThread is forwarded to the
+// result so the handler can decide where to navigate.
+func (m Model) loadGoto(input string, toThread bool) tea.Cmd {
+	requestID := m.gotoRequestID
+	return safeCmdWithPanic(
+		func() tea.Msg {
+			ctx := context.Background()
+			var detail *query.MessageDetail
+			var err error
+			if id, perr := strconv.ParseInt(input, 10, 64); perr == nil {
+				detail, err = m.engine.GetMessage(ctx, id)
+			}
+			if detail == nil && err == nil {
+				detail, err = m.engine.GetMessageBySourceID(ctx, input)
+			}
+			return gotoResultMsg{
+				detail:    detail,
+				err:       err,
+				requestID: requestID,
+				toThread:  toThread,
+			}
+		},
+		func(r any) tea.Msg {
+			return gotoResultMsg{
+				err:       fmt.Errorf("goto lookup panic: %v", r),
+				requestID: requestID,
+				toThread:  toThread,
+			}
+		},
+	)
+}
+
 // spinnerTick returns a command that fires a spinnerTickMsg after the spinner interval.
 func spinnerTick() tea.Cmd {
 	return tea.Tick(spinnerInterval, func(t time.Time) tea.Msg {
@@ -845,6 +890,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleMessageDetailLoaded(msg)
 	case threadMessagesLoadedMsg:
 		return m.handleThreadMessagesLoaded(msg)
+	case gotoResultMsg:
+		return m.handleGotoResult(msg)
 	case searchResultsMsg:
 		return m.handleSearchResults(msg)
 	case flashClearMsg:
@@ -1132,6 +1179,54 @@ func (m Model) handleMessageDetailLoaded(msg messageDetailLoadedMsg) (tea.Model,
 		m.pendingDetailSubject = "" // Clear pending subject
 		m.updateDetailLineCount()   // Calculate line count for scroll bounds
 	}
+	return m, nil
+}
+
+// handleGotoResult processes a goto-by-id lookup completion.
+// On success it pushes a breadcrumb of the current view, then jumps
+// to either levelMessageDetail or levelThreadView (step 4). On not-
+// found or error it shows a flash message and stays in place.
+func (m Model) handleGotoResult(msg gotoResultMsg) (tea.Model, tea.Cmd) {
+	// Ignore stale responses
+	if msg.requestID != m.gotoRequestID {
+		return m, nil
+	}
+	if msg.err != nil {
+		return m.showFlash(fmt.Sprintf("Goto failed: %v", msg.err))
+	}
+	if msg.detail == nil {
+		return m.showFlash("Message not found")
+	}
+
+	m.pushBreadcrumb()
+
+	if msg.toThread {
+		if msg.detail.ConversationID == 0 {
+			return m.showFlash("Message has no thread")
+		}
+		m.transitionBuffer = m.renderView()
+		m.threadConversationID = msg.detail.ConversationID
+		m.threadMessages = nil
+		m.threadCursor = 0
+		m.threadScrollOffset = 0
+		m.level = levelThreadView
+		m.loading = true
+		m.err = nil
+		m.loadRequestID++
+		return m, m.loadThreadMessages(msg.detail.ConversationID)
+	}
+
+	m.transitionBuffer = m.renderView()
+	m.messageDetail = msg.detail
+	m.pendingDetailSubject = msg.detail.Subject
+	m.detailMessageIndex = -1 // not in any list; prev/next disabled
+	m.detailFromThread = false
+	m.detailScroll = 0
+	m.detailLineCount = 0
+	m.level = levelMessageDetail
+	m.loading = false
+	m.err = nil
+	m.updateDetailLineCount()
 	return m, nil
 }
 

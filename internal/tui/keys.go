@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -1335,11 +1336,33 @@ func (m Model) commitInlineSearch() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// commitGoto closes the goto bar and (in step 3+) dispatches the
-// ID lookup. For step 2 it just closes the bar; lookup wiring lands
-// next.
+// commitGoto closes the goto bar and dispatches the ID lookup. The
+// input is parsed for an optional thread prefix (`t:` or `thread:`)
+// before being passed to loadGoto. Empty input is a no-op.
 func (m Model) commitGoto() (tea.Model, tea.Cmd) {
-	return m.cancelGoto()
+	raw := strings.TrimSpace(m.gotoInput.Value())
+	m.gotoActive = false
+	m.gotoInput.Blur()
+	m.gotoInput.SetValue("")
+	if raw == "" {
+		return m, nil
+	}
+
+	toThread := false
+	switch {
+	case strings.HasPrefix(raw, "t:"):
+		toThread = true
+		raw = strings.TrimSpace(strings.TrimPrefix(raw, "t:"))
+	case strings.HasPrefix(raw, "thread:"):
+		toThread = true
+		raw = strings.TrimSpace(strings.TrimPrefix(raw, "thread:"))
+	}
+	if raw == "" {
+		return m.showFlash("Goto: missing ID after prefix")
+	}
+
+	m.gotoRequestID++
+	return m, m.loadGoto(raw, toThread)
 }
 
 // cancelInlineSearch cancels the search and restores previous state.
