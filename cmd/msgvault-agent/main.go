@@ -56,6 +56,7 @@ are excluded. See msgvault-omgnos for the full surface.`,
 	// Read paths
 	cmd.RegisterSearch(root)
 	cmd.RegisterShowMessage(root)
+	cmd.RegisterShowThread(root)
 	cmd.RegisterStats(root)
 	cmd.RegisterListAccounts(root)
 	cmd.RegisterListDomains(root)
