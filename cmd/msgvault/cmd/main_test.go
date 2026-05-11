@@ -54,6 +54,7 @@ func registerAllForTesting(root *cobra.Command) {
 
 	RegisterSearch(root)
 	RegisterShowMessage(root)
+	RegisterShowThread(root)
 	RegisterStats(root)
 	RegisterListAccounts(root)
 	RegisterListDomains(root)

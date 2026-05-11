@@ -76,6 +76,7 @@ subset intended for agent use.`,
 	// Read paths
 	cmd.RegisterSearch(root)
 	cmd.RegisterShowMessage(root)
+	cmd.RegisterShowThread(root)
 	cmd.RegisterStats(root)
 	cmd.RegisterListAccounts(root)
 	cmd.RegisterListDomains(root)
