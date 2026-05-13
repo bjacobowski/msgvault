@@ -7,6 +7,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/wesm/msgvault/internal/search"
 	"github.com/wesm/msgvault/internal/store"
+	"github.com/wesm/msgvault/internal/vector"
+	"github.com/wesm/msgvault/internal/vector/hybrid"
 )
 
 // Store is the narrow set of store operations the v2 handlers need.
@@ -32,15 +34,22 @@ type Store interface {
 
 // Handler holds the dependencies the v2 routes need. The parent api
 // package constructs a Handler and registers its routes under /api/v2.
+//
+// Engine and VectorCfg are only consulted by the search handler; nil
+// Engine causes mode=vector|hybrid to return 503 vector_not_enabled.
 type Handler struct {
-	Store  Store
-	Logger *slog.Logger
+	Store     Store
+	Engine    *hybrid.Engine
+	VectorCfg vector.Config
+	Logger    *slog.Logger
 }
 
-// NewHandler builds a Handler. Either field may be nil — handlers
-// guard for a nil Store and return 503, matching v1's posture.
-func NewHandler(s Store, logger *slog.Logger) *Handler {
-	return &Handler{Store: s, Logger: logger}
+// NewHandler builds a Handler. Store may be nil — handlers return 503
+// for store-backed routes, matching v1's posture. Engine may also be
+// nil, in which case vector/hybrid search returns 503; FTS search
+// continues to work as long as Store is wired.
+func NewHandler(s Store, engine *hybrid.Engine, vcfg vector.Config, logger *slog.Logger) *Handler {
+	return &Handler{Store: s, Engine: engine, VectorCfg: vcfg, Logger: logger}
 }
 
 // Register attaches every v2 route to the given chi router. The router

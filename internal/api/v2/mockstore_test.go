@@ -17,6 +17,10 @@ func testLogger() *slog.Logger {
 // mockStore implements v2.Store for the v2 handler tests. It is a
 // trimmed equivalent of internal/api's test mock — only the methods
 // the v2 surface actually calls are present.
+//
+// Call counters: searchMessagesCalls / searchMessagesQueryCalls let
+// tests assert which FTS path the handler picked (operator query
+// must route through SearchMessagesQuery for v1 parity).
 type mockStore struct {
 	// messagesV2 is keyed by message id and drives /api/v2/messages/{id}
 	// and /api/v2/messages/by-rfc822-id/{rfc822_id}.
@@ -49,6 +53,9 @@ type mockStore struct {
 	// participant-detail endpoints.
 	attachmentsV2  map[int64]*store.APIAttachmentDetailV2
 	participantsV2 map[int64]*store.APIParticipantV2
+
+	searchMessagesCalls      int
+	searchMessagesQueryCalls int
 }
 
 func (m *mockStore) GetMessageV2(id int64) (*store.APIMessageV2, error) {
@@ -108,10 +115,12 @@ func (m *mockStore) GetMessagesSummariesByIDs(ids []int64) ([]store.APIMessage, 
 }
 
 func (m *mockStore) SearchMessages(query string, offset, limit int) ([]store.APIMessage, int64, error) {
+	m.searchMessagesCalls++
 	return m.messages, m.total, nil
 }
 
 func (m *mockStore) SearchMessagesQuery(q *search.Query, offset, limit int) ([]store.APIMessage, int64, error) {
+	m.searchMessagesQueryCalls++
 	return m.messages, m.total, nil
 }
 

@@ -253,7 +253,7 @@ func (s *Server) setupRouter() chi.Router {
 		r.Use(apiv2.APIVersionHeader)
 		r.Use(s.publicReadOrAuth)
 
-		apiv2.NewHandler(s.store, s.logger).Register(r)
+		apiv2.NewHandler(s.store, s.hybridEngine, s.vectorCfg, s.logger).Register(r)
 
 		r.Get("/messages/{id}/body", s.handleMessageBody)
 		r.Get("/attachments/{id}/content", s.handleAttachmentContent)

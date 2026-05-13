@@ -166,3 +166,64 @@ type ErrorResponse struct {
 	Error   string `json:"error"`
 	Message string `json:"message,omitempty"`
 }
+
+// SearchResponse is the unified /api/v2/search shape across fts,
+// vector, and hybrid modes. The same top-level key set is emitted
+// regardless of mode, with three optional metadata fields populated
+// only for vector/hybrid responses; this gives typed clients exactly
+// one Zod schema (or equivalent) for the whole search surface.
+//
+// Total is a pointer because the two pagination models differ: FTS
+// returns a global total count over the corpus, while vector/hybrid
+// returns a top-k relevance pool with no global total. Rather than
+// overload Total with len(messages) for vector/hybrid (which would
+// mislead generic pagers into thinking the result set is exhausted),
+// we emit `"total": null` and let Returned carry the "what you got
+// back" signal unambiguously.
+type SearchResponse struct {
+	Query         string      `json:"query"`
+	Mode          string      `json:"mode"`
+	Offset        int         `json:"offset"`
+	Limit         int         `json:"limit"`
+	Total         *int64      `json:"total"`
+	Returned      int         `json:"returned"`
+	Messages      []SearchHit `json:"messages"`
+	Generation    *Generation `json:"generation,omitempty"`
+	PoolSaturated *bool       `json:"pool_saturated,omitempty"`
+	TookMS        *int64      `json:"took_ms,omitempty"`
+}
+
+// SearchHit is a single search result — a MessageSummary plus, for
+// explain=1 requests, the per-signal score breakdown the engine used
+// to rank the hit.
+type SearchHit struct {
+	MessageSummary
+	Score *ScoreBreakdown `json:"score,omitempty"`
+}
+
+// ScoreBreakdown exposes the fused-score components for a hit. RRF,
+// BM25, and Vector are pointer-typed so a missing signal is
+// distinguishable from a legitimate 0.0 score. In particular,
+// mode=vector reports vector with no rrf (RRF requires two signals to
+// fuse), and mode=fts hits never carry a score (fts is unscored at
+// this surface).
+//
+// Defined locally in v2 — even though the field set happens to match
+// v1's debug shape today, the explicit duplication keeps the v2 wire
+// contract independent of v1 evolution.
+type ScoreBreakdown struct {
+	RRF            *float64 `json:"rrf,omitempty"`
+	BM25           *float64 `json:"bm25,omitempty"`
+	Vector         *float64 `json:"vector,omitempty"`
+	SubjectBoosted bool     `json:"subject_boosted,omitempty"`
+}
+
+// Generation summarizes the active vector-index generation used to
+// answer a vector/hybrid query. Returned only for those modes.
+type Generation struct {
+	ID          int64  `json:"id"`
+	Model       string `json:"model"`
+	Dimension   int    `json:"dimension"`
+	Fingerprint string `json:"fingerprint"`
+	State       string `json:"state"`
+}

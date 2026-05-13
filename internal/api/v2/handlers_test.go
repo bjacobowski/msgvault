@@ -10,18 +10,28 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/wesm/msgvault/internal/store"
+	"github.com/wesm/msgvault/internal/vector"
+	"github.com/wesm/msgvault/internal/vector/hybrid"
 )
 
 // newTestRouter mounts the v2 handler at /api/v2 with the version-header
 // middleware, mirroring the production wiring in internal/api/server.go.
 // Tests then issue requests against this router exactly as a real
 // client would.
+//
+// engine is nil for tests that don't exercise the vector/hybrid search
+// path; vector/hybrid handlers will return 503 vector_not_enabled in
+// that case.
 func newTestRouter(t *testing.T, ms *mockStore) chi.Router {
+	return newTestRouterWithEngine(t, ms, nil, vector.Config{})
+}
+
+func newTestRouterWithEngine(t *testing.T, ms *mockStore, engine *hybrid.Engine, vcfg vector.Config) chi.Router {
 	t.Helper()
 	r := chi.NewRouter()
 	r.Route("/api/v2", func(r chi.Router) {
 		r.Use(APIVersionHeader)
-		NewHandler(ms, testLogger()).Register(r)
+		NewHandler(ms, engine, vcfg, testLogger()).Register(r)
 	})
 	return r
 }
@@ -295,38 +305,17 @@ func TestHandleListMessagesByParticipant(t *testing.T) {
 	}
 }
 
-func TestHandleSearch(t *testing.T) {
-	ms := &mockStore{
-		messages: []store.APIMessage{{ID: 1, Subject: "Hi"}},
-		total:    1,
+// TestHandleSearch_MissingQuery asserts the 400 contract for an empty
+// q across both modes. Defined first so the rest of the search-test
+// surface can focus on the success / mode-specific shape contracts.
+func TestHandleSearch_MissingQuery(t *testing.T) {
+	r := newTestRouter(t, &mockStore{})
+	req := httptest.NewRequest("GET", "/api/v2/search", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
 	}
-	ms.structuredRecipients = map[int64]*store.APIRecipientsV2{
-		1: {From: &store.APIAddress{Address: "sender@example.com"}},
-	}
-	r := newTestRouter(t, ms)
-
-	t.Run("missing q → 400", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/api/v2/search", nil)
-		w := httptest.NewRecorder()
-		r.ServeHTTP(w, req)
-		if w.Code != http.StatusBadRequest {
-			t.Errorf("status = %d, want 400", w.Code)
-		}
-	})
-
-	t.Run("hit returns v2 summaries", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/api/v2/search?q=anything", nil)
-		w := httptest.NewRecorder()
-		r.ServeHTTP(w, req)
-		if w.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
-		}
-		var resp PaginatedMessages
-		_ = json.NewDecoder(w.Body).Decode(&resp)
-		if len(resp.Messages) == 0 || resp.Messages[0].From == nil {
-			t.Errorf("envelope wrong: %+v", resp)
-		}
-	})
 }
 
 func TestHandleGetThread(t *testing.T) {
