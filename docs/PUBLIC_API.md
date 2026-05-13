@@ -72,11 +72,10 @@ review apps actually need. v1 stays available indefinitely for
 existing consumers.
 
 v2 currently covers message list/detail/by-rfc822/body, thread,
-label-filtered list, participant-filtered list, and search. The
-remaining v1 endpoints (`/stats`, `/labels`, `/attachments/{id}`,
-`/attachments/{id}/content`, `/participants/{id}`,
-`/corpus/fingerprint`, and the HTML companion views) don't suffer
-from the v1 shape problems and stay v1-only. They'll grow v2
+label-filtered list, participant detail + filtered list, attachment
+detail + content, and search. The remaining v1 endpoints (`/stats`,
+`/labels`, `/corpus/fingerprint`, and the HTML companion views) don't
+suffer from the v1 shape problems and stay v1-only. They'll grow v2
 variants only if a consumer hits an actual need.
 
 ### v2 list / search response shape
@@ -144,7 +143,10 @@ of which are too expensive to pay per page. Hit
 | GET | `/api/v2/messages/by-rfc822-id/{rfc822_id}` | Lookup by Message-ID (v2 shape). |
 | GET | `/api/v2/threads/{id}` | Thread with v2 message-summary entries. |
 | GET | `/api/v2/labels/{name}/messages` | Label-filtered list (v2 shape). |
+| GET | `/api/v2/participants/{id}` | Participant detail with `is_user_account` flag. |
 | GET | `/api/v2/participants/{id}/messages` | Participant-filtered list (v2 shape). |
+| GET | `/api/v2/attachments/{id}` | Attachment metadata + `thread_id`, `account`, `inline_disposition`. |
+| GET | `/api/v2/attachments/{id}/content` | Same bytes as v1, mounted under v2 for path consistency. |
 | GET | `/api/v2/search?q=…` | FTS search returning v2 summaries (limit/offset). |
 
 ### HTML companions

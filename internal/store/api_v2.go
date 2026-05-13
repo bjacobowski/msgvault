@@ -159,6 +159,76 @@ func (s *Store) getMessageV2Where(where string, args ...any) (*APIMessageV2, err
 	return &v, nil
 }
 
+// GetAttachmentByIDV2 returns the standalone attachment detail with
+// the parent message's thread_id and account email joined in. Returns
+// (nil, nil) when the id is unknown.
+func (s *Store) GetAttachmentByIDV2(id int64) (*APIAttachmentDetailV2, error) {
+	var d APIAttachmentDetailV2
+	var filename, mime, hash, account sql.NullString
+	var size sql.NullInt64
+	err := s.db.QueryRow(
+		`SELECT a.id, a.message_id,
+		        COALESCE(m.conversation_id, 0),
+		        COALESCE(src.identifier, ''),
+		        a.filename, a.mime_type, a.size, a.content_hash, a.storage_path
+		   FROM attachments a
+		   LEFT JOIN messages m   ON m.id = a.message_id
+		   LEFT JOIN sources  src ON src.id = m.source_id
+		  WHERE a.id = ?`,
+		id,
+	).Scan(&d.ID, &d.MessageID, &d.ThreadID, &account,
+		&filename, &mime, &size, &hash, &d.StoragePath)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get attachment v2: %w", err)
+	}
+	d.AccountEmail = account.String
+	d.Filename = filename.String
+	d.MimeType = mime.String
+	d.SizeBytes = size.Int64
+	d.ContentHash = hash.String
+	return &d, nil
+}
+
+// GetParticipantByIDV2 returns the v2 participant detail: same
+// aggregates as v1 plus is_user_account set true when the
+// participant's email matches the identifier of one of the synced
+// sources. Identifier is canonical for source_type='gmail' (the email
+// address) — other source types may use phone numbers so this check
+// is anchored on source_type='gmail' to avoid false positives.
+func (s *Store) GetParticipantByIDV2(id int64) (*APIParticipantV2, error) {
+	p1, err := s.GetParticipantByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if p1 == nil {
+		return nil, nil
+	}
+	v := &APIParticipantV2{
+		ID:           p1.ID,
+		Name:         p1.Name,
+		Address:      p1.Address,
+		Domain:       p1.Domain,
+		MessageCount: p1.MessageCount,
+		FirstSeen:    p1.FirstSeen,
+		LastSeen:     p1.LastSeen,
+	}
+	if v.Address != "" {
+		var n int
+		err := s.db.QueryRow(
+			`SELECT COUNT(*) FROM sources WHERE source_type = 'gmail' AND identifier = ?`,
+			v.Address,
+		).Scan(&n)
+		if err != nil {
+			return nil, fmt.Errorf("v2 participant is_user_account: %w", err)
+		}
+		v.IsUserAccount = n > 0
+	}
+	return v, nil
+}
+
 // BatchMessageMetaV2 returns the v2-only metadata fields
 // (rfc822_message_id, source_message_id, account email, message_type,
 // received_at, attachment_count) for a slice of message ids in a

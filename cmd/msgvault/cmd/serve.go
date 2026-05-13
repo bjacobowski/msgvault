@@ -343,6 +343,14 @@ func (a *storeAPIAdapter) BatchMessageMetaV2(ids []int64) (map[int64]*store.APIM
 	return a.store.BatchMessageMetaV2(ids)
 }
 
+func (a *storeAPIAdapter) GetAttachmentByIDV2(id int64) (*store.APIAttachmentDetailV2, error) {
+	return a.store.GetAttachmentByIDV2(id)
+}
+
+func (a *storeAPIAdapter) GetParticipantByIDV2(id int64) (*store.APIParticipantV2, error) {
+	return a.store.GetParticipantByIDV2(id)
+}
+
 func (a *storeAPIAdapter) GetMessagesSummariesByIDs(ids []int64) ([]api.APIMessage, error) {
 	return a.store.GetMessagesSummariesByIDs(ids)
 }

@@ -557,6 +557,113 @@ func messageSummaryV2FromAPIMessage(m APIMessage, rcp *store.APIRecipientsV2, me
 	return s
 }
 
+// AttachmentResponseV2 is the v2 standalone-attachment JSON. Same
+// fields as the v1 AttachmentResponse plus thread_id, account, and
+// inline_disposition so a deep-linked attachment view can render
+// context without another round-trip.
+type AttachmentResponseV2 struct {
+	ID                int64  `json:"id"`
+	MessageID         int64  `json:"message_id"`
+	ThreadID          int64  `json:"thread_id,omitempty"`
+	Account           string `json:"account,omitempty"`
+	Filename          string `json:"filename,omitempty"`
+	MimeType          string `json:"mime"`
+	SizeBytes         int64  `json:"size_bytes"`
+	ContentHash       string `json:"content_hash,omitempty"`
+	InlineDisposition bool   `json:"inline_disposition"`
+}
+
+// ParticipantResponseV2 is the v2 participant JSON. Adds
+// is_user_account on top of the v1 fields so consumers can render
+// "you" vs "them" without looking up the synced-accounts list.
+type ParticipantResponseV2 struct {
+	ID            int64  `json:"id"`
+	Name          string `json:"name,omitempty"`
+	Address       string `json:"address"`
+	Domain        string `json:"domain,omitempty"`
+	MessageCount  int64  `json:"message_count"`
+	FirstSeen     string `json:"first_seen,omitempty"`
+	LastSeen      string `json:"last_seen,omitempty"`
+	IsUserAccount bool   `json:"is_user_account"`
+}
+
+// handleGetAttachmentV2 serves /api/v2/attachments/{id}.
+func (s *Server) handleGetAttachmentV2(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "Attachment ID must be a number")
+		return
+	}
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
+		return
+	}
+
+	att, err := s.store.GetAttachmentByIDV2(id)
+	if err != nil {
+		s.logger.Error("get attachment v2", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve attachment")
+		return
+	}
+	if att == nil {
+		writeError(w, http.StatusNotFound, "not_found", "Attachment not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, AttachmentResponseV2{
+		ID:                att.ID,
+		MessageID:         att.MessageID,
+		ThreadID:          att.ThreadID,
+		Account:           att.AccountEmail,
+		Filename:          att.Filename,
+		MimeType:          att.MimeType,
+		SizeBytes:         att.SizeBytes,
+		ContentHash:       att.ContentHash,
+		InlineDisposition: isInlineSafeMIME(att.MimeType),
+	})
+}
+
+// handleGetParticipantV2 serves /api/v2/participants/{id}.
+func (s *Server) handleGetParticipantV2(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "Participant ID must be a number")
+		return
+	}
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
+		return
+	}
+
+	p, err := s.store.GetParticipantByIDV2(id)
+	if err != nil {
+		s.logger.Error("get participant v2", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve participant")
+		return
+	}
+	if p == nil {
+		writeError(w, http.StatusNotFound, "not_found", "Participant not found")
+		return
+	}
+
+	resp := ParticipantResponseV2{
+		ID:            p.ID,
+		Name:          p.Name,
+		Address:       p.Address,
+		Domain:        p.Domain,
+		MessageCount:  p.MessageCount,
+		IsUserAccount: p.IsUserAccount,
+	}
+	if !p.FirstSeen.IsZero() {
+		resp.FirstSeen = p.FirstSeen.UTC().Format(time.RFC3339)
+	}
+	if !p.LastSeen.IsZero() {
+		resp.LastSeen = p.LastSeen.UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // v2APIVersionHeader replaces the global v1 header for routes mounted
 // under /api/v2.
 func v2APIVersionHeader(next http.Handler) http.Handler {

@@ -640,6 +640,98 @@ func TestStore_BatchMessageMetaV2(t *testing.T) {
 	}
 }
 
+func TestStore_GetAttachmentByIDV2(t *testing.T) {
+	f := storetest.New(t)
+
+	id, err := f.Store.UpsertMessage(&store.Message{
+		ConversationID:  f.ConvID,
+		SourceID:        f.Source.ID,
+		SourceMessageID: "src-att",
+		MessageType:     "email",
+		SizeEstimate:    1,
+		HasAttachments:  true,
+		AttachmentCount: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Store.UpsertAttachment(id, "report.pdf", "application/pdf",
+		"ab/abcd1234", "abcd1234", 4096); err != nil {
+		t.Fatal(err)
+	}
+
+	var attID int64
+	if err := f.Store.DB().QueryRow(
+		`SELECT id FROM attachments WHERE message_id = ?`, id,
+	).Scan(&attID); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := f.Store.GetAttachmentByIDV2(attID)
+	if err != nil {
+		t.Fatalf("GetAttachmentByIDV2: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected hit, got nil")
+	}
+	if got.MessageID != id || got.ThreadID != f.ConvID {
+		t.Errorf("ids wrong: msg=%d thread=%d (want msg=%d thread=%d)",
+			got.MessageID, got.ThreadID, id, f.ConvID)
+	}
+	if got.AccountEmail != "test@example.com" {
+		t.Errorf("account = %q", got.AccountEmail)
+	}
+	if got.MimeType != "application/pdf" || got.SizeBytes != 4096 {
+		t.Errorf("mime/size wrong: %+v", got)
+	}
+}
+
+func TestStore_GetParticipantByIDV2(t *testing.T) {
+	f := storetest.New(t)
+
+	// The fixture creates a source with identifier="test@example.com",
+	// so a participant with that exact email should be flagged as a
+	// user account; any other address should not.
+	userPID := f.EnsureParticipant("test@example.com", "Me", "example.com")
+	extPID := f.EnsureParticipant("stranger@somewhere.com", "Stranger", "somewhere.com")
+
+	t.Run("user-account participant has is_user_account=true", func(t *testing.T) {
+		got, err := f.Store.GetParticipantByIDV2(userPID)
+		if err != nil {
+			t.Fatalf("GetParticipantByIDV2: %v", err)
+		}
+		if got == nil {
+			t.Fatal("expected hit, got nil")
+		}
+		if !got.IsUserAccount {
+			t.Errorf("expected is_user_account=true for address matching sources.identifier")
+		}
+	})
+
+	t.Run("external participant has is_user_account=false", func(t *testing.T) {
+		got, err := f.Store.GetParticipantByIDV2(extPID)
+		if err != nil {
+			t.Fatalf("GetParticipantByIDV2: %v", err)
+		}
+		if got == nil {
+			t.Fatal("expected hit, got nil")
+		}
+		if got.IsUserAccount {
+			t.Errorf("external address should not be flagged as user account")
+		}
+	})
+
+	t.Run("miss returns nil", func(t *testing.T) {
+		got, err := f.Store.GetParticipantByIDV2(99999)
+		if err != nil {
+			t.Fatalf("GetParticipantByIDV2: %v", err)
+		}
+		if got != nil {
+			t.Errorf("expected nil, got %+v", got)
+		}
+	})
+}
+
 func TestStore_GetCorpusFingerprint(t *testing.T) {
 	f := storetest.New(t)
 

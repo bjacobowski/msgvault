@@ -3463,6 +3463,130 @@ func TestHandleGetThreadV2(t *testing.T) {
 	}
 }
 
+func TestHandleGetAttachmentV2(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	ms.attachmentsV2 = map[int64]*store.APIAttachmentDetailV2{
+		7: {
+			ID: 7, MessageID: 11134, ThreadID: 2754,
+			AccountEmail: "user@example.com",
+			Filename:     "report.pdf", MimeType: "application/pdf",
+			SizeBytes: 4096, ContentHash: "abcd",
+		},
+		8: {
+			ID: 8, MessageID: 11135, ThreadID: 2754,
+			AccountEmail: "user@example.com",
+			Filename:     "evil.html", MimeType: "text/html",
+			SizeBytes: 1024,
+		},
+	}
+
+	t.Run("PDF reports inline_disposition=true", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v2/attachments/7", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		if got := w.Header().Get("X-MsgVault-API"); got != "v2" {
+			t.Errorf("X-MsgVault-API = %q, want v2", got)
+		}
+		var resp AttachmentResponseV2
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.ID != 7 || resp.MessageID != 11134 || resp.ThreadID != 2754 {
+			t.Errorf("ids wrong: %+v", resp)
+		}
+		if resp.Account != "user@example.com" {
+			t.Errorf("account = %q", resp.Account)
+		}
+		if !resp.InlineDisposition {
+			t.Errorf("PDF must report inline_disposition=true")
+		}
+	})
+
+	t.Run("HTML attachment reports inline_disposition=false", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v2/attachments/8", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		var resp AttachmentResponseV2
+		_ = json.NewDecoder(w.Body).Decode(&resp)
+		if resp.InlineDisposition {
+			t.Errorf("HTML must report inline_disposition=false (XSS guard)")
+		}
+	})
+
+	t.Run("miss returns 404 JSON", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v2/attachments/9999", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", w.Code)
+		}
+	})
+}
+
+func TestHandleGetParticipantV2(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	first := mustParseTime(t, "2024-01-01T00:00:00Z")
+	last := mustParseTime(t, "2026-05-13T00:00:00Z")
+	ms.participantsV2 = map[int64]*store.APIParticipantV2{
+		42: {
+			ID: 42, Name: "User", Address: "user@example.com",
+			Domain: "example.com", MessageCount: 100,
+			FirstSeen: first, LastSeen: last,
+			IsUserAccount: true,
+		},
+		43: {
+			ID: 43, Name: "External", Address: "ext@somewhere.com",
+			Domain: "somewhere.com", MessageCount: 5,
+			IsUserAccount: false,
+		},
+	}
+
+	t.Run("user-account participant flagged", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v2/participants/42", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		if got := w.Header().Get("X-MsgVault-API"); got != "v2" {
+			t.Errorf("X-MsgVault-API = %q, want v2", got)
+		}
+		var resp ParticipantResponseV2
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if !resp.IsUserAccount {
+			t.Errorf("expected is_user_account=true for synced address")
+		}
+		if resp.FirstSeen != "2024-01-01T00:00:00Z" {
+			t.Errorf("first_seen = %q", resp.FirstSeen)
+		}
+	})
+
+	t.Run("external participant not flagged", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v2/participants/43", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		var resp ParticipantResponseV2
+		_ = json.NewDecoder(w.Body).Decode(&resp)
+		if resp.IsUserAccount {
+			t.Errorf("external participant should not be flagged as user account")
+		}
+	})
+
+	t.Run("miss returns 404 JSON", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v2/participants/9999", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", w.Code)
+		}
+	})
+}
+
 func TestV2RoutesStampV2VersionHeader(t *testing.T) {
 	// Sanity check: the global v1 header middleware must be overridden
 	// on /api/v2 routes by v2APIVersionHeader. A v2 endpoint that

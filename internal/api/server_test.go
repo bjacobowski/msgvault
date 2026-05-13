@@ -101,6 +101,12 @@ type mockStore struct {
 	// messageMetaV2 drives BatchMessageMetaV2. Keyed by message id.
 	messageMetaV2 map[int64]*store.APIMessageMetaV2
 
+	// attachmentsV2 drives the v2 attachment-detail endpoint.
+	attachmentsV2 map[int64]*store.APIAttachmentDetailV2
+
+	// participantsV2 drives the v2 participant-detail endpoint.
+	participantsV2 map[int64]*store.APIParticipantV2
+
 	// Call counts so tests can assert that bulk hydration paths use
 	// GetMessagesSummariesByIDs (one round-trip) instead of looping
 	// GetMessage (per-hit N+1).
@@ -214,6 +220,28 @@ func (m *mockStore) BatchMessageMetaV2(ids []int64) (map[int64]*store.APIMessage
 		}
 	}
 	return out, nil
+}
+
+func (m *mockStore) GetAttachmentByIDV2(id int64) (*store.APIAttachmentDetailV2, error) {
+	if m.attachmentsV2 == nil {
+		return nil, nil
+	}
+	a, ok := m.attachmentsV2[id]
+	if !ok {
+		return nil, nil
+	}
+	return a, nil
+}
+
+func (m *mockStore) GetParticipantByIDV2(id int64) (*store.APIParticipantV2, error) {
+	if m.participantsV2 == nil {
+		return nil, nil
+	}
+	p, ok := m.participantsV2[id]
+	if !ok {
+		return nil, nil
+	}
+	return p, nil
 }
 
 // subsetMessages emulates LIMIT/OFFSET pagination against an in-memory

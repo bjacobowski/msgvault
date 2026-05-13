@@ -180,6 +180,37 @@ type APIParticipant struct {
 	LastSeen     time.Time
 }
 
+// APIAttachmentDetailV2 is the standalone attachment shape returned
+// by /api/v2/attachments/{id}. Adds thread_id and account so a
+// consumer that deep-linked to an attachment can recover the parent
+// thread/account without another round-trip.
+type APIAttachmentDetailV2 struct {
+	ID           int64
+	MessageID    int64
+	ThreadID     int64
+	AccountEmail string
+	Filename     string
+	MimeType     string
+	SizeBytes    int64
+	ContentHash  string
+	StoragePath  string // path relative to the attachments dir
+}
+
+// APIParticipantV2 is the v2 participant shape. Same identity +
+// aggregate fields as v1 plus is_user_account so review apps can
+// distinguish a synced account holder from an external party
+// (renders "you" vs "them" correctly).
+type APIParticipantV2 struct {
+	ID            int64
+	Name          string
+	Address       string
+	Domain        string
+	MessageCount  int64
+	FirstSeen     time.Time
+	LastSeen      time.Time
+	IsUserAccount bool
+}
+
 // APIAttachmentDetail is the standalone attachment shape used by
 // /api/v1/attachments/{id}. It carries everything the API server needs
 // to locate, label, and serve the on-disk file. Distinct from
