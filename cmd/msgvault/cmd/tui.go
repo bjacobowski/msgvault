@@ -381,4 +381,5 @@ func init() {
 // with the given root command. The agent and full-surface binaries
 // call this to opt this command in.
 func RegisterTUI(root *cobra.Command) {
-	root.AddCommand(tuiCmd)}
+	root.AddCommand(tuiCmd)
+}

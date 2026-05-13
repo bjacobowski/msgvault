@@ -33,4 +33,5 @@ func init() {
 // with the given root command. The agent and full-surface binaries
 // call this to opt this command in.
 func RegisterVersion(root *cobra.Command) {
-	root.AddCommand(versionCmd)}
+	root.AddCommand(versionCmd)
+}

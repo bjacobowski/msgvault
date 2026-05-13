@@ -42,4 +42,5 @@ func init() {
 // with the given root command. The agent and full-surface binaries
 // call this to opt this command in.
 func RegisterEmbed(root *cobra.Command) {
-	root.AddCommand(embedCmd)}
+	root.AddCommand(embedCmd)
+}

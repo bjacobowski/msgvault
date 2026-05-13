@@ -59,4 +59,5 @@ func init() {
 // with the given root command. The agent and full-surface binaries
 // call this to opt this command in.
 func RegisterCompletion(root *cobra.Command) {
-	root.AddCommand(completionCmd)}
+	root.AddCommand(completionCmd)
+}

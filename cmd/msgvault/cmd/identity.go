@@ -421,4 +421,5 @@ func init() {
 // with the given root command. The agent and full-surface binaries
 // call this to opt this command in.
 func RegisterIdentity(root *cobra.Command) {
-	root.AddCommand(identityCmd)}
+	root.AddCommand(identityCmd)
+}

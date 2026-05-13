@@ -32,4 +32,5 @@ func init() {
 // with the given root command. The agent and full-surface binaries
 // call this to opt this command in.
 func RegisterQuickstart(root *cobra.Command) {
-	root.AddCommand(quickstartCmd)}
+	root.AddCommand(quickstartCmd)
+}

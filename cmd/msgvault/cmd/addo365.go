@@ -176,4 +176,5 @@ func init() {
 // with the given root command. The agent and full-surface binaries
 // call this to opt this command in.
 func RegisterAddO365(root *cobra.Command) {
-	root.AddCommand(addO365Cmd)}
+	root.AddCommand(addO365Cmd)
+}

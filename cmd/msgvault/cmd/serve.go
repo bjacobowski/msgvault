@@ -449,4 +449,5 @@ func runScheduledSync(ctx context.Context, email string, s *store.Store, getOAut
 // with the given root command. The agent and full-surface binaries
 // call this to opt this command in.
 func RegisterServe(root *cobra.Command) {
-	root.AddCommand(serveCmd)}
+	root.AddCommand(serveCmd)
+}
