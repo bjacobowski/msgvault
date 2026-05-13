@@ -303,6 +303,10 @@ func (a *storeAPIAdapter) GetThread(id int64) (*store.APIThread, error) {
 	return a.store.GetThread(id)
 }
 
+func (a *storeAPIAdapter) GetAttachmentByID(id int64) (*store.APIAttachmentDetail, error) {
+	return a.store.GetAttachmentByID(id)
+}
+
 func (a *storeAPIAdapter) GetMessagesSummariesByIDs(ids []int64) ([]api.APIMessage, error) {
 	return a.store.GetMessagesSummariesByIDs(ids)
 }

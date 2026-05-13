@@ -36,6 +36,21 @@ type APIAttachment struct {
 	Size     int64
 }
 
+// APIAttachmentDetail is the standalone attachment shape used by
+// /api/v1/attachments/{id}. It carries everything the API server needs
+// to locate, label, and serve the on-disk file. Distinct from
+// APIAttachment (the per-message embedded summary) so message
+// responses stay lean.
+type APIAttachmentDetail struct {
+	ID          int64
+	MessageID   int64
+	Filename    string
+	MimeType    string
+	Size        int64
+	ContentHash string
+	StoragePath string // path relative to the attachments dir: <ab>/<hash>
+}
+
 // APIThread represents a conversation/thread for API responses. Messages
 // are ordered by sent_at ascending so review apps can render them
 // top-to-bottom in chronological order.
@@ -206,6 +221,32 @@ func (s *Store) GetMessage(id int64) (*APIMessage, error) {
 	m.Headers = make(map[string]string)
 
 	return &m, nil
+}
+
+// GetAttachmentByID looks up a single attachment by its primary key,
+// returning the metadata plus on-disk location needed to serve the file.
+// Returns nil with no error when the attachment does not exist.
+func (s *Store) GetAttachmentByID(id int64) (*APIAttachmentDetail, error) {
+	var d APIAttachmentDetail
+	var filename, mime, hash sql.NullString
+	var size sql.NullInt64
+	err := s.db.QueryRow(
+		`SELECT id, message_id, filename, mime_type, size, content_hash, storage_path
+		   FROM attachments
+		  WHERE id = ?`,
+		id,
+	).Scan(&d.ID, &d.MessageID, &filename, &mime, &size, &hash, &d.StoragePath)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get attachment: %w", err)
+	}
+	d.Filename = filename.String
+	d.MimeType = mime.String
+	d.Size = size.Int64
+	d.ContentHash = hash.String
+	return &d, nil
 }
 
 // GetThread returns the thread (conversation) with the given id, including

@@ -2750,3 +2750,162 @@ func TestHandleMessageView_HTML(t *testing.T) {
 		}
 	})
 }
+
+// attachmentTestSetup writes a fake attachment file in the
+// content-addressed layout (<dir>/<ab>/<hash>) and returns a server that
+// will find it. Reused by content + HTML view tests.
+func attachmentTestSetup(t *testing.T, mime, bodyBytes string) (*Server, *mockStore, int64) {
+	t.Helper()
+	dir := t.TempDir()
+	hash := "abcd1234ef56" // arbitrary; first 2 chars are the prefix dir
+	relPath := filepath.Join(hash[:2], hash)
+	full := filepath.Join(dir, "attachments", relPath)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(full, []byte(bodyBytes), 0o644); err != nil {
+		t.Fatalf("write attachment: %v", err)
+	}
+
+	srv, ms := newTestServerWithMockStore(t)
+	srv.cfg.Data.DataDir = dir
+	const attID int64 = 7
+	ms.attachmentsByID = map[int64]*store.APIAttachmentDetail{
+		attID: {
+			ID:          attID,
+			MessageID:   1,
+			Filename:    "report.pdf",
+			MimeType:    mime,
+			Size:        int64(len(bodyBytes)),
+			ContentHash: hash,
+			StoragePath: relPath,
+		},
+	}
+	return srv, ms, attID
+}
+
+func TestHandleGetAttachment_JSON(t *testing.T) {
+	srv, _, id := attachmentTestSetup(t, "application/pdf", "%PDF-1.4 fake")
+
+	req := httptest.NewRequest("GET", fmt.Sprintf("/api/v1/attachments/%d", id), nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp AttachmentResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.ID != id || resp.MessageID != 1 || resp.MimeType != "application/pdf" {
+		t.Errorf("unexpected payload: %+v", resp)
+	}
+}
+
+func TestHandleAttachmentContent(t *testing.T) {
+	t.Run("PDF served inline", func(t *testing.T) {
+		srv, _, id := attachmentTestSetup(t, "application/pdf", "%PDF-1.4 fake")
+		req := httptest.NewRequest("GET", fmt.Sprintf("/api/v1/attachments/%d/content", id), nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		if ct := w.Header().Get("Content-Type"); ct != "application/pdf" {
+			t.Errorf("Content-Type = %q, want application/pdf", ct)
+		}
+		if disp := w.Header().Get("Content-Disposition"); !strings.HasPrefix(disp, "inline;") {
+			t.Errorf("Content-Disposition = %q, want inline prefix", disp)
+		}
+	})
+
+	t.Run("HTML attachment forced to download", func(t *testing.T) {
+		srv, _, id := attachmentTestSetup(t, "text/html", "<script>alert(1)</script>")
+		req := httptest.NewRequest("GET", fmt.Sprintf("/api/v1/attachments/%d/content", id), nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		if disp := w.Header().Get("Content-Disposition"); !strings.HasPrefix(disp, "attachment;") {
+			t.Errorf("Content-Disposition = %q, want attachment prefix (XSS guard)", disp)
+		}
+	})
+
+	t.Run("SVG attachment forced to download", func(t *testing.T) {
+		srv, _, id := attachmentTestSetup(t, "image/svg+xml", "<svg onload=alert(1) />")
+		req := httptest.NewRequest("GET", fmt.Sprintf("/api/v1/attachments/%d/content", id), nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if disp := w.Header().Get("Content-Disposition"); !strings.HasPrefix(disp, "attachment;") {
+			t.Errorf("SVG should not be inline; got %q", disp)
+		}
+	})
+
+	t.Run("missing file returns 410", func(t *testing.T) {
+		srv, ms, _ := attachmentTestSetup(t, "application/pdf", "%PDF")
+		// Point to a non-existent storage path.
+		ms.attachmentsByID[7].StoragePath = "ff/missing"
+
+		req := httptest.NewRequest("GET", "/api/v1/attachments/7/content", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusGone {
+			t.Errorf("status = %d, want 410 (gone)", w.Code)
+		}
+	})
+
+	t.Run("missing id returns 404", func(t *testing.T) {
+		srv, _, _ := attachmentTestSetup(t, "application/pdf", "%PDF")
+		req := httptest.NewRequest("GET", "/api/v1/attachments/9999/content", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", w.Code)
+		}
+	})
+}
+
+func TestHandleAttachmentView_HTML(t *testing.T) {
+	t.Run("PDF preview iframes content", func(t *testing.T) {
+		srv, _, id := attachmentTestSetup(t, "application/pdf", "%PDF")
+		req := httptest.NewRequest("GET", fmt.Sprintf("/attachment/%d", id), nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		body := w.Body.String()
+		if !strings.Contains(body, "<iframe") {
+			t.Errorf("PDF preview should iframe; got: %s", body)
+		}
+		if !strings.Contains(body, "/api/v1/attachments/7/content") {
+			t.Errorf("iframe src should reference content URL; got: %s", body)
+		}
+	})
+
+	t.Run("image preview embeds img tag", func(t *testing.T) {
+		srv, _, id := attachmentTestSetup(t, "image/png", "binary")
+		req := httptest.NewRequest("GET", fmt.Sprintf("/attachment/%d", id), nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		body := w.Body.String()
+		if !strings.Contains(body, "<img") {
+			t.Errorf("image preview should use <img>; got: %s", body)
+		}
+	})
+
+	t.Run("non-safelist falls back to download CTA", func(t *testing.T) {
+		srv, _, id := attachmentTestSetup(t, "application/zip", "PK")
+		req := httptest.NewRequest("GET", fmt.Sprintf("/attachment/%d", id), nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		body := w.Body.String()
+		if strings.Contains(body, "<iframe") || strings.Contains(body, "<img") {
+			t.Errorf("zip should not preview inline; got: %s", body)
+		}
+		if !strings.Contains(body, "Download") {
+			t.Errorf("zip should show Download CTA; got: %s", body)
+		}
+	})
+}

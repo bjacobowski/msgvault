@@ -77,6 +77,9 @@ type mockStore struct {
 	// threads, keyed by thread id, used by the threads endpoints.
 	threads map[int64]*store.APIThread
 
+	// attachmentsByID, keyed by attachment id, used by the attachment endpoints.
+	attachmentsByID map[int64]*store.APIAttachmentDetail
+
 	// Call counts so tests can assert that bulk hydration paths use
 	// GetMessagesSummariesByIDs (one round-trip) instead of looping
 	// GetMessage (per-hit N+1).
@@ -112,6 +115,17 @@ func (m *mockStore) GetMessageByRFC822ID(rfc822ID string) (*APIMessage, error) {
 		return nil, nil
 	}
 	return m.GetMessage(id)
+}
+
+func (m *mockStore) GetAttachmentByID(id int64) (*store.APIAttachmentDetail, error) {
+	if m.attachmentsByID == nil {
+		return nil, nil
+	}
+	a, ok := m.attachmentsByID[id]
+	if !ok {
+		return nil, nil
+	}
+	return a, nil
 }
 
 func (m *mockStore) GetThread(id int64) (*store.APIThread, error) {

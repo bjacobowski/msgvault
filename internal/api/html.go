@@ -73,6 +73,27 @@ var threadViewTemplate = template.Must(template.New("thread").Parse(htmlBaseLayo
 // messageViewTemplate renders messageViewData inside the shared layout.
 var messageViewTemplate = template.Must(template.New("message").Parse(htmlBaseLayout))
 
+// attachmentViewTemplate renders attachmentViewData inside the shared layout.
+var attachmentViewTemplate = template.Must(template.New("attachment").Parse(htmlBaseLayout))
+
+// attachmentViewData drives the /attachment/{id} preview page.
+//
+// PreviewMode controls the inline rendering strategy:
+//
+//	"pdf"   → <iframe src="/api/v1/attachments/{id}/content">
+//	"image" → <img src="/api/v1/attachments/{id}/content">
+//	"text"  → <iframe> the content (browser will render text/plain)
+//	"none"  → download CTA only
+type attachmentViewData struct {
+	ID          int64
+	MessageID   int64
+	Filename    string
+	MimeType    string
+	Size        int64
+	PreviewMode string
+	ContentURL  string
+}
+
 // messageViewData carries the fields the /m/{id} template needs. Bodies
 // are split: BodyHTML rendered as-is (already trusted msgvault-stored
 // content), BodyText shown only when no HTML part exists.
@@ -166,6 +187,32 @@ func init() {
     {{end}}
   </ul>
 </aside>
+{{end}}
+`))
+}
+
+func init() {
+	template.Must(attachmentViewTemplate.New("title").Parse(
+		`{{if .Filename}}{{.Filename}}{{else}}Attachment {{.ID}}{{end}} — msgvault`,
+	))
+	template.Must(attachmentViewTemplate.New("body").Parse(`
+<header class="mv">
+  <h1>{{if .Filename}}{{.Filename}}{{else}}Attachment {{.ID}}{{end}}</h1>
+  <div class="mv-meta">
+    <span class="mv-id">attachment {{.ID}}</span>
+    {{if .MessageID}}· <a href="/m/{{.MessageID}}">message {{.MessageID}}</a>{{end}}
+    · {{.MimeType}} · {{.Size}} bytes
+  </div>
+</header>
+{{if eq .PreviewMode "pdf"}}
+  <iframe src="{{.ContentURL}}" style="width: 100%; height: 80vh; border: 1px solid color-mix(in srgb, currentColor 15%, transparent); border-radius: 6px;"></iframe>
+{{else if eq .PreviewMode "image"}}
+  <img src="{{.ContentURL}}" alt="{{.Filename}}" style="max-width: 100%; height: auto; border-radius: 6px;">
+{{else if eq .PreviewMode "text"}}
+  <iframe src="{{.ContentURL}}" style="width: 100%; height: 60vh; border: 1px solid color-mix(in srgb, currentColor 15%, transparent); border-radius: 6px;"></iframe>
+{{else}}
+  <p>This attachment type isn't previewed inline.</p>
+  <p><a href="{{.ContentURL}}">Download {{.Filename}}</a></p>
 {{end}}
 `))
 }

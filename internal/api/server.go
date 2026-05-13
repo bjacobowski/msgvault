@@ -30,6 +30,7 @@ type MessageStore interface {
 	GetMessageByRFC822ID(rfc822ID string) (*APIMessage, error)
 	GetMessageBodies(id int64) (text, html string, err error)
 	GetThread(id int64) (*store.APIThread, error)
+	GetAttachmentByID(id int64) (*store.APIAttachmentDetail, error)
 	GetMessagesSummariesByIDs(ids []int64) ([]APIMessage, error)
 	SearchMessages(query string, offset, limit int) ([]APIMessage, int64, error)
 	SearchMessagesQuery(q *search.Query, offset, limit int) ([]APIMessage, int64, error)
@@ -174,6 +175,7 @@ func (s *Server) setupRouter() chi.Router {
 		r.Use(s.publicReadOrAuth)
 		r.Get("/m/{id}", s.handleMessageView)
 		r.Get("/t/{id}", s.handleThreadView)
+		r.Get("/attachment/{id}", s.handleAttachmentView)
 	})
 
 	// API routes. The /api/v1 mount splits into two groups:
@@ -195,6 +197,8 @@ func (s *Server) setupRouter() chi.Router {
 			r.Get("/messages/{id}/inline", s.handleMessageInline)
 			r.Get("/messages/by-rfc822-id/{rfc822_id}", s.handleGetMessageByRFC822ID)
 			r.Get("/threads/{id}", s.handleGetThread)
+			r.Get("/attachments/{id}", s.handleGetAttachment)
+			r.Get("/attachments/{id}/content", s.handleAttachmentContent)
 			r.Get("/search", s.handleSearch)
 			r.Get("/aggregates", s.handleAggregates)
 			r.Get("/aggregates/sub", s.handleSubAggregates)

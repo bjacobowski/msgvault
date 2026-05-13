@@ -646,6 +646,197 @@ func (s *Server) handleGetThread(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// AttachmentResponse is the JSON metadata for /api/v1/attachments/{id}.
+type AttachmentResponse struct {
+	ID          int64  `json:"id"`
+	MessageID   int64  `json:"message_id"`
+	Filename    string `json:"filename"`
+	MimeType    string `json:"mime"`
+	Size        int64  `json:"size_bytes"`
+	ContentHash string `json:"content_hash,omitempty"`
+}
+
+// inlineSafeMIMETypes is the safelist of attachment MIME types that may be
+// served with `Content-Disposition: inline`. Everything else is forced to
+// download to keep XSS surface flat: an HTML or SVG attachment served
+// inline could execute scripts from the msgvault origin.
+var inlineSafeMIMETypes = map[string]struct{}{
+	"application/pdf": {},
+	"image/png":       {},
+	"image/jpeg":      {},
+	"image/gif":       {},
+	"image/webp":      {},
+	"text/plain":      {},
+}
+
+// isInlineSafeMIME reports whether the given Content-Type can be served
+// with `inline` disposition. Only the type/subtype is considered; any
+// parameters (e.g. `charset=...`) are stripped.
+func isInlineSafeMIME(ct string) bool {
+	base := strings.ToLower(strings.TrimSpace(strings.SplitN(ct, ";", 2)[0]))
+	_, ok := inlineSafeMIMETypes[base]
+	return ok
+}
+
+// handleGetAttachment returns JSON metadata for an attachment.
+func (s *Server) handleGetAttachment(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "Attachment ID must be a number")
+		return
+	}
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
+		return
+	}
+
+	att, err := s.store.GetAttachmentByID(id)
+	if err != nil {
+		s.logger.Error("failed to get attachment", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve attachment")
+		return
+	}
+	if att == nil {
+		writeError(w, http.StatusNotFound, "not_found", "Attachment not found")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, AttachmentResponse{
+		ID:          att.ID,
+		MessageID:   att.MessageID,
+		Filename:    att.Filename,
+		MimeType:    att.MimeType,
+		Size:        att.Size,
+		ContentHash: att.ContentHash,
+	})
+}
+
+// handleAttachmentContent streams the attachment bytes from disk, using the
+// inline-safe MIME safelist to choose `Content-Disposition`. Range
+// requests and conditional GETs are delegated to http.ServeContent.
+func (s *Server) handleAttachmentContent(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "Attachment ID must be a number")
+		return
+	}
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
+		return
+	}
+	if s.cfg == nil {
+		writeError(w, http.StatusServiceUnavailable, "config_unavailable", "Server config missing")
+		return
+	}
+
+	att, err := s.store.GetAttachmentByID(id)
+	if err != nil {
+		s.logger.Error("failed to get attachment", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve attachment")
+		return
+	}
+	if att == nil {
+		writeError(w, http.StatusNotFound, "not_found", "Attachment not found")
+		return
+	}
+
+	fullPath := filepath.Join(s.cfg.AttachmentsDir(), filepath.FromSlash(att.StoragePath))
+	f, err := os.Open(fullPath) //nolint:gosec // path joined from server-configured root + DB-stored relative path
+	if err != nil {
+		s.logger.Warn("attachment file unavailable", "id", id, "path", fullPath, "error", err)
+		writeError(w, http.StatusGone, "content_unavailable", "Attachment file not on disk")
+		return
+	}
+	defer func() { _ = f.Close() }()
+
+	fi, err := f.Stat()
+	if err != nil {
+		s.logger.Error("attachment stat failed", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to stat attachment")
+		return
+	}
+
+	disposition := "attachment"
+	if isInlineSafeMIME(att.MimeType) {
+		disposition = "inline"
+	}
+	mt := att.MimeType
+	if mt == "" {
+		mt = "application/octet-stream"
+	}
+
+	w.Header().Set("Content-Type", mt)
+	w.Header().Set("Content-Disposition",
+		fmt.Sprintf("%s; filename=%q", disposition, sanitizeFilenameForDisposition(att.Filename)))
+	http.ServeContent(w, r, att.Filename, fi.ModTime(), f)
+}
+
+// sanitizeFilenameForDisposition strips characters that would break a
+// quoted-string in Content-Disposition. Anything fancier (RFC 5987
+// filename*) is overkill for the radical-roc use case.
+func sanitizeFilenameForDisposition(name string) string {
+	if name == "" {
+		return "attachment"
+	}
+	replacer := strings.NewReplacer("\\", "_", "\"", "_", "\r", "_", "\n", "_")
+	return replacer.Replace(name)
+}
+
+// handleAttachmentView serves the HTML preview page at /attachment/{id}.
+// PDFs and safelisted images are iframed/embedded; everything else
+// renders a download CTA.
+func (s *Server) handleAttachmentView(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeHTMLNotFound(w, "Invalid attachment id")
+		return
+	}
+	if s.store == nil {
+		writeHTMLError(w, http.StatusServiceUnavailable, "Database not available")
+		return
+	}
+
+	att, err := s.store.GetAttachmentByID(id)
+	if err != nil {
+		s.logger.Error("failed to get attachment for HTML view", "id", id, "error", err)
+		writeHTMLError(w, http.StatusInternalServerError, "Failed to retrieve attachment")
+		return
+	}
+	if att == nil {
+		writeHTMLNotFound(w, fmt.Sprintf("Attachment %d not found in this corpus", id))
+		return
+	}
+
+	data := attachmentViewData{
+		ID:         att.ID,
+		MessageID:  att.MessageID,
+		Filename:   att.Filename,
+		MimeType:   att.MimeType,
+		Size:       att.Size,
+		ContentURL: fmt.Sprintf("/api/v1/attachments/%d/content", att.ID),
+	}
+	base := strings.ToLower(strings.TrimSpace(strings.SplitN(att.MimeType, ";", 2)[0]))
+	switch {
+	case base == "application/pdf":
+		data.PreviewMode = "pdf"
+	case strings.HasPrefix(base, "image/") && isInlineSafeMIME(base):
+		data.PreviewMode = "image"
+	case base == "text/plain":
+		data.PreviewMode = "text"
+	default:
+		data.PreviewMode = "none"
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	if err := attachmentViewTemplate.Execute(w, data); err != nil {
+		s.logger.Error("failed to render attachment template", "id", id, "error", err)
+	}
+}
+
 // handleMessageView serves the HTML single-message view at /m/{id}. Reuses
 // GetMessage + GetMessageBodies to assemble a chrome-less page suitable
 // for iframe-embed in a review-app pane.
