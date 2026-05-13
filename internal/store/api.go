@@ -1,7 +1,9 @@
 package store
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -34,6 +36,224 @@ type APIAttachment struct {
 	Filename string
 	MimeType string
 	Size     int64
+}
+
+// APIAddress is one structured email participant. Distinct from a
+// participant *row* (APIParticipant) — addresses appear inline on
+// every message; participants are the canonical identities.
+type APIAddress struct {
+	Name    string
+	Address string
+}
+
+// APIMessageMetaV2 holds the v2-specific fields that aren't already
+// on APIMessage but are cheap to batch-load alongside list results.
+// Populated by BatchMessageMetaV2 and merged in at the API layer so
+// v1 list methods stay untouched.
+type APIMessageMetaV2 struct {
+	RFC822MessageID string
+	SourceMessageID string
+	AccountEmail    string
+	MessageType     string
+	ReceivedAt      time.Time
+	AttachmentCount int
+}
+
+// APIMessageSummaryV2 is the list-mode shape: same identity and
+// metadata as APIMessageV2 but without the body, attachments, or MIME-
+// derived headers (in_reply_to, references). List endpoints avoid the
+// per-row body fetch + MIME parse that the detail endpoint pays.
+type APIMessageSummaryV2 struct {
+	ID              int64
+	RFC822MessageID string
+	SourceMessageID string
+	ThreadID        int64
+	AccountEmail    string
+	MessageType     string
+	Subject         string
+	Snippet         string
+	From            *APIAddress
+	To              []APIAddress
+	Cc              []APIAddress
+	SentAt          time.Time
+	ReceivedAt      time.Time
+	Labels          []string
+	HasAttachments  bool
+	AttachmentCount int
+	SizeBytes       int64
+	DeletedAt       *time.Time
+}
+
+// APIRecipientsV2 holds the structured participants for a single
+// message — produced by BatchStructuredRecipients so list endpoints
+// can hydrate many messages in one query.
+type APIRecipientsV2 struct {
+	From *APIAddress
+	To   []APIAddress
+	Cc   []APIAddress
+	Bcc  []APIAddress
+}
+
+// APIAttachmentV2 is the per-message attachment summary used by the v2
+// message endpoint. Carries the attachment id so consumers can deep
+// link to /attachment/{id} or /api/v1/attachments/{id}/content.
+type APIAttachmentV2 struct {
+	ID          int64
+	Filename    string
+	MimeType    string
+	SizeBytes   int64
+	ContentHash string
+}
+
+// APIMessageV2 is the v2 message-detail shape. Adds the headers and
+// IDs review apps actually care about (rfc822, in-reply-to,
+// references, structured participants, thread id, account, attachment
+// ids) that v1's APIMessage flattened away.
+//
+// Source mix: structured participants come from message_recipients +
+// participants; in_reply_to / references / reply_to come from
+// re-parsing the raw MIME blob via internal/mime; everything else is
+// already on the messages / sources / labels tables.
+type APIMessageV2 struct {
+	ID              int64
+	RFC822MessageID string
+	SourceMessageID string
+	ThreadID        int64
+	AccountEmail    string
+	MessageType     string
+	Subject         string
+	Snippet         string
+	From            *APIAddress
+	To              []APIAddress
+	Cc              []APIAddress
+	Bcc             []APIAddress
+	ReplyTo         []APIAddress
+	InReplyTo       string
+	References      []string
+	SentAt          time.Time
+	ReceivedAt      time.Time
+	Labels          []string
+	HasAttachments  bool
+	AttachmentCount int
+	SizeBytes       int64
+	DeletedAt       *time.Time
+	BodyText        string
+	BodyHTML        string
+	Attachments     []APIAttachmentV2
+}
+
+// APICorpusFingerprint is the cheap "did the corpus change" digest
+// returned by /api/v1/corpus/fingerprint.
+//
+// Recipe: sha256("<message_count>|<latest_sent_at_unix>|<max_id>").
+// Stable as long as no compaction renumbers ids; changes on every
+// sync. Useful for detecting that *something* changed about the corpus
+// since an artifact was prepared. NOT a per-citation hash — for
+// content-stable references see [[per-message-content-hash]] (declined
+// for now; see PLAN-radical-roc-wishlist.md C1).
+type APICorpusFingerprint struct {
+	Fingerprint         string
+	AsOf                time.Time
+	MessageCount        int64
+	LatestMessageSentAt time.Time
+}
+
+// APILabelCount is one row of the /api/v1/labels listing: a label name
+// and the number of live messages bearing it. Aggregated across all
+// sources — Gmail's INBOX, IMPORTANT, etc. collapse across accounts.
+type APILabelCount struct {
+	Name  string
+	Count int64
+}
+
+// APIParticipant is the per-id participant detail used by
+// /api/v1/participants/{id}. FirstSeen / LastSeen are zero when the
+// participant exists in the participants table but has no recipient
+// rows (rare; usually orphaned imports).
+type APIParticipant struct {
+	ID           int64
+	Name         string
+	Address      string // email when present, falls back to phone
+	Domain       string
+	MessageCount int64
+	FirstSeen    time.Time
+	LastSeen     time.Time
+}
+
+// APIAttachmentDetailV2 is the standalone attachment shape returned
+// by /api/v2/attachments/{id}. Adds thread_id and account so a
+// consumer that deep-linked to an attachment can recover the parent
+// thread/account without another round-trip.
+type APIAttachmentDetailV2 struct {
+	ID           int64
+	MessageID    int64
+	ThreadID     int64
+	AccountEmail string
+	Filename     string
+	MimeType     string
+	SizeBytes    int64
+	ContentHash  string
+	StoragePath  string // path relative to the attachments dir
+}
+
+// APIParticipantV2 is the v2 participant shape. Same identity +
+// aggregate fields as v1 plus is_user_account so review apps can
+// distinguish a synced account holder from an external party
+// (renders "you" vs "them" correctly).
+type APIParticipantV2 struct {
+	ID            int64
+	Name          string
+	Address       string
+	Domain        string
+	MessageCount  int64
+	FirstSeen     time.Time
+	LastSeen      time.Time
+	IsUserAccount bool
+}
+
+// APIAttachmentDetail is the standalone attachment shape used by
+// /api/v1/attachments/{id}. It carries everything the API server needs
+// to locate, label, and serve the on-disk file. Distinct from
+// APIAttachment (the per-message embedded summary) so message
+// responses stay lean.
+type APIAttachmentDetail struct {
+	ID          int64
+	MessageID   int64
+	Filename    string
+	MimeType    string
+	Size        int64
+	ContentHash string
+	StoragePath string // path relative to the attachments dir: <ab>/<hash>
+}
+
+// APIThread represents a conversation/thread for API responses. Messages
+// are ordered by sent_at ascending so review apps can render them
+// top-to-bottom in chronological order.
+type APIThread struct {
+	ID           int64
+	Subject      string
+	MessageCount int64
+	Participants []APIThreadParticipant
+	Messages     []APIThreadMessage
+}
+
+// APIThreadParticipant identifies one party in a thread. Name may be empty
+// for participants we only ever saw as a bare address.
+type APIThreadParticipant struct {
+	ID      int64
+	Name    string
+	Address string
+}
+
+// APIThreadMessage is the compact per-message summary used inside a thread
+// response. Full bodies are fetched via /api/v1/messages/{id} or
+// /api/v1/messages/{id}/body.
+type APIThreadMessage struct {
+	ID       int64
+	SentAt   time.Time
+	FromName string
+	From     string
+	Snippet  string
 }
 
 // ListMessages returns a paginated list of messages with batch-loaded recipients and labels.
@@ -176,6 +396,388 @@ func (s *Store) GetMessage(id int64) (*APIMessage, error) {
 	m.Headers = make(map[string]string)
 
 	return &m, nil
+}
+
+// GetCorpusFingerprint computes the cheap drift-detection digest in a
+// single round-trip and returns the inputs alongside it so callers can
+// surface useful "as-of" context.
+//
+// Implementation notes:
+//   - COUNT, MAX(sent_at), MAX(id) are derived in one SELECT to keep
+//     this endpoint sub-millisecond on multi-million-row corpora.
+//   - Live messages only (source-deleted rows excluded) so the
+//     fingerprint matches what the rest of the read API exposes.
+//   - latest_sent_at is encoded as a Unix second to keep the digest
+//     stable across timezone-string normalization.
+func (s *Store) GetCorpusFingerprint() (*APICorpusFingerprint, error) {
+	live := LiveMessagesWhere("", true)
+
+	var (
+		count       int64
+		maxID       sql.NullInt64
+		latestSent  sql.NullString
+		fingerprint string
+	)
+	err := s.db.QueryRow(fmt.Sprintf(`
+		SELECT
+			COUNT(*),
+			MAX(id),
+			MAX(COALESCE(sent_at, received_at, internal_date))
+		  FROM messages WHERE %s`, live),
+	).Scan(&count, &maxID, &latestSent)
+	if err != nil {
+		return nil, fmt.Errorf("corpus fingerprint: %w", err)
+	}
+
+	fp := &APICorpusFingerprint{
+		AsOf:         time.Now().UTC(),
+		MessageCount: count,
+	}
+	if latestSent.Valid && latestSent.String != "" {
+		fp.LatestMessageSentAt = parseSQLiteTime(latestSent.String)
+	}
+
+	// sha256("<count>|<latest_sent_unix>|<max_id>") — stable inputs only.
+	h := sha256.New()
+	_, _ = fmt.Fprintf(h, "%d|%d|%d", count, fp.LatestMessageSentAt.Unix(), maxID.Int64)
+	fingerprint = "sha256:" + hex.EncodeToString(h.Sum(nil))
+	fp.Fingerprint = fingerprint
+	return fp, nil
+}
+
+// ListLabels returns label names with their live-message counts,
+// aggregated across all sources. Same-named labels from different
+// sources collapse to one row.
+func (s *Store) ListLabels() ([]APILabelCount, error) {
+	query := fmt.Sprintf(`
+		SELECT l.name, COUNT(ml.message_id) AS cnt
+		  FROM labels l
+		  JOIN message_labels ml ON ml.label_id = l.id
+		  JOIN messages m ON m.id = ml.message_id
+		 WHERE %s
+		 GROUP BY l.name
+		 ORDER BY cnt DESC, l.name ASC
+	`, LiveMessagesWhere("m", true))
+
+	rows, err := s.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("list labels: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []APILabelCount
+	for rows.Next() {
+		var lc APILabelCount
+		if err := rows.Scan(&lc.Name, &lc.Count); err != nil {
+			return nil, fmt.Errorf("scan label row: %w", err)
+		}
+		out = append(out, lc)
+	}
+	return out, rows.Err()
+}
+
+// ListMessagesByLabel returns a paginated list of live messages tagged
+// with the given label name. Sort order matches ListMessages: newest
+// first by sent_at.
+func (s *Store) ListMessagesByLabel(name string, offset, limit int) ([]APIMessage, int64, error) {
+	live := LiveMessagesWhere("m", true)
+
+	var total int64
+	err := s.db.QueryRow(fmt.Sprintf(`
+		SELECT COUNT(*)
+		  FROM messages m
+		 WHERE EXISTS (
+		     SELECT 1 FROM message_labels ml
+		       JOIN labels l ON l.id = ml.label_id
+		      WHERE ml.message_id = m.id AND l.name = ?
+		 ) AND %s`, live), name).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count by label: %w", err)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			m.id,
+			COALESCE(m.conversation_id, 0),
+			COALESCE(m.subject, ''),
+			COALESCE(p.email_address, ''),
+			COALESCE(m.sent_at, m.received_at, m.internal_date),
+			COALESCE(m.snippet, ''),
+			m.has_attachments,
+			m.size_estimate
+		  FROM messages m
+		  LEFT JOIN message_recipients mr ON mr.message_id = m.id AND mr.recipient_type = 'from'
+		  LEFT JOIN participants p ON p.id = mr.participant_id
+		 WHERE EXISTS (
+		     SELECT 1 FROM message_labels ml
+		       JOIN labels l ON l.id = ml.label_id
+		      WHERE ml.message_id = m.id AND l.name = ?
+		 ) AND %s
+		 ORDER BY COALESCE(m.sent_at, m.received_at, m.internal_date) DESC
+		 LIMIT ? OFFSET ?
+	`, live)
+
+	rows, err := s.db.Query(query, name, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list by label: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	messages, ids, err := scanMessageRows(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(ids) > 0 {
+		if err := s.batchPopulate(messages, ids); err != nil {
+			return nil, 0, err
+		}
+	}
+	return messages, total, nil
+}
+
+// GetParticipantByID resolves a participant id to its display profile
+// (name, address, domain) plus aggregate stats (message count and
+// first/last seen). Returns nil with no error when the id is unknown.
+func (s *Store) GetParticipantByID(id int64) (*APIParticipant, error) {
+	var p APIParticipant
+	var name, email, phone, domain sql.NullString
+	err := s.db.QueryRow(
+		`SELECT id, COALESCE(display_name, ''), COALESCE(email_address, ''),
+		        COALESCE(phone_number, ''), COALESCE(domain, '')
+		   FROM participants WHERE id = ?`,
+		id,
+	).Scan(&p.ID, &name, &email, &phone, &domain)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get participant: %w", err)
+	}
+	p.Name = name.String
+	p.Address = email.String
+	if p.Address == "" {
+		p.Address = phone.String
+	}
+	p.Domain = domain.String
+
+	var firstSeen, lastSeen sql.NullString
+	err = s.db.QueryRow(fmt.Sprintf(`
+		SELECT COUNT(*),
+		       MIN(COALESCE(m.sent_at, m.received_at, m.internal_date)),
+		       MAX(COALESCE(m.sent_at, m.received_at, m.internal_date))
+		  FROM messages m
+		 WHERE EXISTS (
+		     SELECT 1 FROM message_recipients mr
+		      WHERE mr.message_id = m.id AND mr.participant_id = ?
+		 ) AND %s`, LiveMessagesWhere("m", true)),
+		id,
+	).Scan(&p.MessageCount, &firstSeen, &lastSeen)
+	if err != nil {
+		return nil, fmt.Errorf("participant aggregates: %w", err)
+	}
+	if firstSeen.Valid && firstSeen.String != "" {
+		p.FirstSeen = parseSQLiteTime(firstSeen.String)
+	}
+	if lastSeen.Valid && lastSeen.String != "" {
+		p.LastSeen = parseSQLiteTime(lastSeen.String)
+	}
+	return &p, nil
+}
+
+// ListMessagesByParticipant returns a paginated list of live messages
+// involving the given participant in any recipient_type (from, to, cc,
+// bcc). Sort order matches ListMessages.
+func (s *Store) ListMessagesByParticipant(id int64, offset, limit int) ([]APIMessage, int64, error) {
+	live := LiveMessagesWhere("m", true)
+	involves := `EXISTS (SELECT 1 FROM message_recipients mr WHERE mr.message_id = m.id AND mr.participant_id = ?)`
+
+	var total int64
+	err := s.db.QueryRow(
+		fmt.Sprintf(`SELECT COUNT(*) FROM messages m WHERE %s AND %s`, involves, live),
+		id,
+	).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count by participant: %w", err)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			m.id,
+			COALESCE(m.conversation_id, 0),
+			COALESCE(m.subject, ''),
+			COALESCE(p.email_address, ''),
+			COALESCE(m.sent_at, m.received_at, m.internal_date),
+			COALESCE(m.snippet, ''),
+			m.has_attachments,
+			m.size_estimate
+		  FROM messages m
+		  LEFT JOIN message_recipients mr_from ON mr_from.message_id = m.id AND mr_from.recipient_type = 'from'
+		  LEFT JOIN participants p ON p.id = mr_from.participant_id
+		 WHERE %s AND %s
+		 ORDER BY COALESCE(m.sent_at, m.received_at, m.internal_date) DESC
+		 LIMIT ? OFFSET ?
+	`, involves, live)
+
+	rows, err := s.db.Query(query, id, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list by participant: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	messages, ids, err := scanMessageRows(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(ids) > 0 {
+		if err := s.batchPopulate(messages, ids); err != nil {
+			return nil, 0, err
+		}
+	}
+	return messages, total, nil
+}
+
+// GetAttachmentByID looks up a single attachment by its primary key,
+// returning the metadata plus on-disk location needed to serve the file.
+// Returns nil with no error when the attachment does not exist.
+func (s *Store) GetAttachmentByID(id int64) (*APIAttachmentDetail, error) {
+	var d APIAttachmentDetail
+	var filename, mime, hash sql.NullString
+	var size sql.NullInt64
+	err := s.db.QueryRow(
+		`SELECT id, message_id, filename, mime_type, size, content_hash, storage_path
+		   FROM attachments
+		  WHERE id = ?`,
+		id,
+	).Scan(&d.ID, &d.MessageID, &filename, &mime, &size, &hash, &d.StoragePath)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get attachment: %w", err)
+	}
+	d.Filename = filename.String
+	d.MimeType = mime.String
+	d.Size = size.Int64
+	d.ContentHash = hash.String
+	return &d, nil
+}
+
+// GetThread returns the thread (conversation) with the given id, including
+// its compact subject, deduplicated participants, and the per-message
+// summaries needed to render a review-pane view. Returns nil with no
+// error when no thread matches.
+//
+// Only live messages count toward MessageCount and appear in Messages;
+// source-deleted rows are filtered via LiveMessagesWhere so the response
+// matches what /api/v1/messages already returns.
+func (s *Store) GetThread(id int64) (*APIThread, error) {
+	t := &APIThread{ID: id}
+
+	// Conversation header (subject lives in conversations.title for email).
+	var title sql.NullString
+	err := s.db.QueryRow(
+		`SELECT COALESCE(title, '') FROM conversations WHERE id = ?`,
+		id,
+	).Scan(&title)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get thread header: %w", err)
+	}
+	t.Subject = title.String
+
+	// Messages (live only), ordered chronologically.
+	msgQuery := fmt.Sprintf(`
+		SELECT
+			m.id,
+			COALESCE(p.display_name, '') as from_name,
+			COALESCE(p.email_address, '') as from_email,
+			COALESCE(m.sent_at, m.received_at, m.internal_date) as sent_at,
+			COALESCE(m.snippet, '') as snippet
+		FROM messages m
+		LEFT JOIN message_recipients mr ON mr.message_id = m.id AND mr.recipient_type = 'from'
+		LEFT JOIN participants p ON p.id = mr.participant_id
+		WHERE m.conversation_id = ? AND %s
+		ORDER BY sent_at ASC, m.id ASC
+	`, LiveMessagesWhere("m", true))
+
+	rows, err := s.db.Query(msgQuery, id)
+	if err != nil {
+		return nil, fmt.Errorf("get thread messages: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var (
+			tm        APIThreadMessage
+			sentAtStr sql.NullString
+		)
+		if err := rows.Scan(&tm.ID, &tm.FromName, &tm.From, &sentAtStr, &tm.Snippet); err != nil {
+			return nil, fmt.Errorf("scan thread message: %w", err)
+		}
+		if sentAtStr.Valid && sentAtStr.String != "" {
+			tm.SentAt = parseSQLiteTime(sentAtStr.String)
+		}
+		t.Messages = append(t.Messages, tm)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate thread messages: %w", err)
+	}
+	t.MessageCount = int64(len(t.Messages))
+
+	// Participants: distinct senders + recipients across all live messages
+	// in the thread. Cheaper than reading conversation_participants and
+	// keeps the response self-consistent with Messages.
+	partQuery := fmt.Sprintf(`
+		SELECT DISTINCT p.id, COALESCE(p.display_name, ''), COALESCE(p.email_address, '')
+		FROM participants p
+		JOIN message_recipients mr ON mr.participant_id = p.id
+		JOIN messages m ON m.id = mr.message_id
+		WHERE m.conversation_id = ? AND %s
+		ORDER BY p.id
+	`, LiveMessagesWhere("m", true))
+
+	prows, err := s.db.Query(partQuery, id)
+	if err != nil {
+		return nil, fmt.Errorf("get thread participants: %w", err)
+	}
+	defer func() { _ = prows.Close() }()
+
+	for prows.Next() {
+		var p APIThreadParticipant
+		if err := prows.Scan(&p.ID, &p.Name, &p.Address); err != nil {
+			return nil, fmt.Errorf("scan thread participant: %w", err)
+		}
+		t.Participants = append(t.Participants, p)
+	}
+	if err := prows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate thread participants: %w", err)
+	}
+
+	return t, nil
+}
+
+// GetMessageBodies returns the raw text and HTML body parts for a message,
+// each empty if missing. Returns ("", "", nil) when the message has no
+// recorded body (or doesn't exist) — callers needing to distinguish
+// "no message" from "no body" should pair this with GetMessage.
+//
+// This is the only access path besides GetMessage that touches the
+// message_bodies table; it preserves the small-B-tree invariant.
+func (s *Store) GetMessageBodies(id int64) (text, html string, err error) {
+	var t, h sql.NullString
+	err = s.db.QueryRow(
+		"SELECT body_text, body_html FROM message_bodies WHERE message_id = ?",
+		id,
+	).Scan(&t, &h)
+	if err == sql.ErrNoRows {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("get message bodies: %w", err)
+	}
+	return t.String, h.String, nil
 }
 
 // GetMessagesSummariesByIDs returns summary-level (no body, no

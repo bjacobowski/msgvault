@@ -149,9 +149,13 @@ func TestRateLimitMiddleware(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
+	// Non-loopback caller so the limiter actually engages. Loopback is
+	// bypassed unconditionally — see TestRateLimitMiddleware_LoopbackBypass.
+	const remote = "203.0.113.5:1234"
+
 	// First request should succeed
 	req1 := httptest.NewRequest("GET", "/test", nil)
-	req1.RemoteAddr = "127.0.0.1:1234"
+	req1.RemoteAddr = remote
 	w1 := httptest.NewRecorder()
 	handler.ServeHTTP(w1, req1)
 
@@ -161,7 +165,7 @@ func TestRateLimitMiddleware(t *testing.T) {
 
 	// Second immediate request should be rate limited
 	req2 := httptest.NewRequest("GET", "/test", nil)
-	req2.RemoteAddr = "127.0.0.1:1234"
+	req2.RemoteAddr = remote
 	w2 := httptest.NewRecorder()
 	handler.ServeHTTP(w2, req2)
 
@@ -172,5 +176,49 @@ func TestRateLimitMiddleware(t *testing.T) {
 	// Check Retry-After header
 	if w2.Header().Get("Retry-After") == "" {
 		t.Error("missing Retry-After header on rate limited response")
+	}
+}
+
+func TestRateLimitMiddleware_LoopbackBypass(t *testing.T) {
+	// burst=1 means a non-loopback caller would be limited after one hit;
+	// loopback callers must sail through.
+	rl := NewRateLimiter(1, 1)
+	t.Cleanup(rl.Close)
+	middleware := RateLimitMiddleware(rl)
+
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	cases := []string{
+		"127.0.0.1:5000",
+		"127.0.0.5:5000", // anywhere in 127.0.0.0/8
+		"[::1]:5000",
+	}
+
+	for _, remote := range cases {
+		for i := 0; i < 5; i++ {
+			req := httptest.NewRequest("GET", "/test", nil)
+			req.RemoteAddr = remote
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("loopback %s req %d: status = %d, want 200", remote, i, w.Code)
+			}
+		}
+	}
+}
+
+func TestAPIVersionHeaderMiddleware(t *testing.T) {
+	handler := APIVersionHeaderMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/anything", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if got := w.Header().Get("X-MsgVault-API"); got != "v1" {
+		t.Errorf("X-MsgVault-API = %q, want %q", got, "v1")
 	}
 }

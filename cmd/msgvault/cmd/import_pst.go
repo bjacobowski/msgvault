@@ -166,4 +166,5 @@ func init() {
 // with the given root command. The agent and full-surface binaries
 // call this to opt this command in.
 func RegisterImportPst(root *cobra.Command) {
-	root.AddCommand(importPstCmd)}
+	root.AddCommand(importPstCmd)
+}

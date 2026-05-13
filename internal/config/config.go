@@ -32,6 +32,7 @@ type ServerConfig struct {
 	CORSOrigins     []string `toml:"cors_origins"`     // Allowed CORS origins (empty = disabled)
 	CORSCredentials bool     `toml:"cors_credentials"` // Allow credentials in CORS
 	CORSMaxAge      int      `toml:"cors_max_age"`     // Preflight cache duration in seconds
+	PublicRead      bool     `toml:"public_read"`      // Skip auth for read GETs and default-enable CORS for embedding from file:// artifacts
 }
 
 // IsLoopback returns true if the bind address is a loopback address.

@@ -217,4 +217,5 @@ func isLoopbackHost(host string) bool {
 // with the given root command. The agent and full-surface binaries
 // call this to opt this command in.
 func RegisterMCP(root *cobra.Command) {
-	root.AddCommand(mcpCmd)}
+	root.AddCommand(mcpCmd)
+}

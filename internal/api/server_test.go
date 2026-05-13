@@ -12,6 +12,7 @@ import (
 
 	"github.com/wesm/msgvault/internal/config"
 	"github.com/wesm/msgvault/internal/search"
+	"github.com/wesm/msgvault/internal/store"
 )
 
 // testLogger returns a logger for tests that discards output
@@ -66,6 +67,46 @@ type mockStore struct {
 	messages []APIMessage
 	total    int64
 
+	// bodies, keyed by message id, lets tests exercise the body endpoint
+	// without standing up the full store. Each entry holds (text, html).
+	bodies map[int64][2]string
+
+	// rfc822 mapping for the by-rfc822-id lookup endpoint.
+	rfc822Index map[string]int64
+
+	// threads, keyed by thread id, used by the threads endpoints.
+	threads map[int64]*store.APIThread
+
+	// attachmentsByID, keyed by attachment id, used by the attachment endpoints.
+	attachmentsByID map[int64]*store.APIAttachmentDetail
+
+	// labels and labelMembership drive the labels endpoints.
+	labels          []store.APILabelCount
+	labelMembership map[string][]int64
+
+	// participants and participantMembership drive the participants endpoints.
+	participants          map[int64]*store.APIParticipant
+	participantMembership map[int64][]int64
+
+	// corpusFingerprint, when non-nil, is returned by GetCorpusFingerprint.
+	corpusFingerprint *store.APICorpusFingerprint
+
+	// messagesV2, keyed by message id, drives the /api/v2 endpoints.
+	messagesV2 map[int64]*store.APIMessageV2
+
+	// structuredRecipients drives BatchStructuredRecipients for v2 list
+	// endpoints. Keyed by message id.
+	structuredRecipients map[int64]*store.APIRecipientsV2
+
+	// messageMetaV2 drives BatchMessageMetaV2. Keyed by message id.
+	messageMetaV2 map[int64]*store.APIMessageMetaV2
+
+	// attachmentsV2 drives the v2 attachment-detail endpoint.
+	attachmentsV2 map[int64]*store.APIAttachmentDetailV2
+
+	// participantsV2 drives the v2 participant-detail endpoint.
+	participantsV2 map[int64]*store.APIParticipantV2
+
 	// Call counts so tests can assert that bulk hydration paths use
 	// GetMessagesSummariesByIDs (one round-trip) instead of looping
 	// GetMessage (per-hit N+1).
@@ -93,6 +134,171 @@ func (m *mockStore) GetMessage(id int64) (*APIMessage, error) {
 		}
 	}
 	return nil, nil
+}
+
+func (m *mockStore) GetMessageByRFC822ID(rfc822ID string) (*APIMessage, error) {
+	id, ok := m.rfc822Index[rfc822ID]
+	if !ok {
+		return nil, nil
+	}
+	return m.GetMessage(id)
+}
+
+func (m *mockStore) ListLabels() ([]store.APILabelCount, error) {
+	return m.labels, nil
+}
+
+func (m *mockStore) ListMessagesByLabel(name string, offset, limit int) ([]APIMessage, int64, error) {
+	ids := m.labelMembership[name]
+	return m.subsetMessages(ids, offset, limit)
+}
+
+func (m *mockStore) GetParticipantByID(id int64) (*store.APIParticipant, error) {
+	if m.participants == nil {
+		return nil, nil
+	}
+	p, ok := m.participants[id]
+	if !ok {
+		return nil, nil
+	}
+	return p, nil
+}
+
+func (m *mockStore) ListMessagesByParticipant(id int64, offset, limit int) ([]APIMessage, int64, error) {
+	ids := m.participantMembership[id]
+	return m.subsetMessages(ids, offset, limit)
+}
+
+func (m *mockStore) GetCorpusFingerprint() (*store.APICorpusFingerprint, error) {
+	if m.corpusFingerprint == nil {
+		return nil, nil
+	}
+	cp := *m.corpusFingerprint
+	return &cp, nil
+}
+
+func (m *mockStore) GetMessageV2(id int64) (*store.APIMessageV2, error) {
+	if m.messagesV2 == nil {
+		return nil, nil
+	}
+	v, ok := m.messagesV2[id]
+	if !ok {
+		return nil, nil
+	}
+	return v, nil
+}
+
+func (m *mockStore) GetMessageV2ByRFC822ID(rfc822ID string) (*store.APIMessageV2, error) {
+	id, ok := m.rfc822Index[rfc822ID]
+	if !ok {
+		return nil, nil
+	}
+	return m.GetMessageV2(id)
+}
+
+func (m *mockStore) BatchStructuredRecipients(ids []int64) (map[int64]*store.APIRecipientsV2, error) {
+	out := make(map[int64]*store.APIRecipientsV2, len(ids))
+	if m.structuredRecipients == nil {
+		return out, nil
+	}
+	for _, id := range ids {
+		if rcp, ok := m.structuredRecipients[id]; ok {
+			out[id] = rcp
+		}
+	}
+	return out, nil
+}
+
+func (m *mockStore) BatchMessageMetaV2(ids []int64) (map[int64]*store.APIMessageMetaV2, error) {
+	out := make(map[int64]*store.APIMessageMetaV2, len(ids))
+	if m.messageMetaV2 == nil {
+		return out, nil
+	}
+	for _, id := range ids {
+		if meta, ok := m.messageMetaV2[id]; ok {
+			out[id] = meta
+		}
+	}
+	return out, nil
+}
+
+func (m *mockStore) GetAttachmentByIDV2(id int64) (*store.APIAttachmentDetailV2, error) {
+	if m.attachmentsV2 == nil {
+		return nil, nil
+	}
+	a, ok := m.attachmentsV2[id]
+	if !ok {
+		return nil, nil
+	}
+	return a, nil
+}
+
+func (m *mockStore) GetParticipantByIDV2(id int64) (*store.APIParticipantV2, error) {
+	if m.participantsV2 == nil {
+		return nil, nil
+	}
+	p, ok := m.participantsV2[id]
+	if !ok {
+		return nil, nil
+	}
+	return p, nil
+}
+
+// subsetMessages emulates LIMIT/OFFSET pagination against an in-memory
+// id list, used by the label and participant listing tests.
+func (m *mockStore) subsetMessages(ids []int64, offset, limit int) ([]APIMessage, int64, error) {
+	byID := make(map[int64]APIMessage, len(m.messages))
+	for _, msg := range m.messages {
+		byID[msg.ID] = msg
+	}
+	total := int64(len(ids))
+	if offset >= len(ids) {
+		return nil, total, nil
+	}
+	end := offset + limit
+	if end > len(ids) {
+		end = len(ids)
+	}
+	out := make([]APIMessage, 0, end-offset)
+	for _, id := range ids[offset:end] {
+		if msg, ok := byID[id]; ok {
+			out = append(out, msg)
+		}
+	}
+	return out, total, nil
+}
+
+func (m *mockStore) GetAttachmentByID(id int64) (*store.APIAttachmentDetail, error) {
+	if m.attachmentsByID == nil {
+		return nil, nil
+	}
+	a, ok := m.attachmentsByID[id]
+	if !ok {
+		return nil, nil
+	}
+	return a, nil
+}
+
+func (m *mockStore) GetThread(id int64) (*store.APIThread, error) {
+	if m.threads == nil {
+		return nil, nil
+	}
+	t, ok := m.threads[id]
+	if !ok {
+		return nil, nil
+	}
+	return t, nil
+}
+
+func (m *mockStore) GetMessageBodies(id int64) (text, html string, err error) {
+	if m.bodies == nil {
+		return "", "", nil
+	}
+	pair, ok := m.bodies[id]
+	if !ok {
+		return "", "", nil
+	}
+	return pair[0], pair[1], nil
 }
 
 func (m *mockStore) GetMessagesSummariesByIDs(ids []int64) ([]APIMessage, error) {
@@ -203,6 +409,100 @@ func TestAuthMiddleware(t *testing.T) {
 				t.Errorf("status = %d, want %d", w.Code, tt.wantStatus)
 			}
 		})
+	}
+}
+
+func TestPublicReadAuthMiddleware(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			APIPort:    8080,
+			APIKey:     "secret-key",
+			PublicRead: true,
+		},
+	}
+	sched := newMockScheduler()
+	srv := NewServer(cfg, nil, sched, testLogger())
+
+	t.Run("GET read endpoint without auth is allowed", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v1/stats", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code == http.StatusUnauthorized {
+			t.Errorf("status = 401, expected non-401 (got past auth) under public_read")
+		}
+	})
+
+	t.Run("HEAD read endpoint without auth is allowed", func(t *testing.T) {
+		req := httptest.NewRequest("HEAD", "/api/v1/stats", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code == http.StatusUnauthorized {
+			t.Errorf("status = 401, expected non-401 under public_read")
+		}
+	})
+
+	t.Run("POST write endpoint without auth is rejected", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/api/v1/sync/test@gmail.com", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want 401 (writes still require auth)", w.Code)
+		}
+	})
+
+	t.Run("X-MsgVault-API header is stamped on responses", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v1/stats", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if got := w.Header().Get("X-MsgVault-API"); got != "v1" {
+			t.Errorf("X-MsgVault-API = %q, want %q", got, "v1")
+		}
+	})
+}
+
+func TestPublicReadDisabledStillRequiresAuth(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			APIPort:    8080,
+			APIKey:     "secret-key",
+			PublicRead: false,
+		},
+	}
+	sched := newMockScheduler()
+	srv := NewServer(cfg, nil, sched, testLogger())
+
+	req := httptest.NewRequest("GET", "/api/v1/stats", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 when public_read is off", w.Code)
+	}
+}
+
+func TestPublicReadDefaultsCORSToWildcard(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			APIPort:    8080,
+			PublicRead: true,
+			// CORSOrigins intentionally empty: public_read should default
+			// it to "*" so file:// (Origin: null) artifacts can fetch.
+		},
+	}
+	sched := newMockScheduler()
+	srv := NewServer(cfg, nil, sched, testLogger())
+
+	req := httptest.NewRequest("OPTIONS", "/api/v1/stats", nil)
+	req.Header.Set("Origin", "null")
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "null" {
+		t.Errorf("Access-Control-Allow-Origin = %q, want %q (echoed null origin under wildcard)", got, "null")
+	}
+	if w.Code != http.StatusNoContent {
+		t.Errorf("preflight status = %d, want 204", w.Code)
 	}
 }
 

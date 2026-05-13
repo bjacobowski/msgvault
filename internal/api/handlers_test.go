@@ -21,6 +21,7 @@ import (
 	"github.com/wesm/msgvault/internal/query"
 	"github.com/wesm/msgvault/internal/query/querytest"
 	"github.com/wesm/msgvault/internal/remote"
+	"github.com/wesm/msgvault/internal/store"
 	"github.com/wesm/msgvault/internal/vector"
 	"github.com/wesm/msgvault/internal/vector/hybrid"
 )
@@ -33,6 +34,15 @@ type stubEmbedder struct{}
 
 func (stubEmbedder) Embed(_ context.Context, _ []string) ([][]float32, error) {
 	return nil, errors.New("stubEmbedder.Embed should not be called in this test")
+}
+
+func mustParseTime(t *testing.T, s string) time.Time {
+	t.Helper()
+	got, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		t.Fatalf("parse %q: %v", s, err)
+	}
+	return got
 }
 
 func newTestServerWithMockStore(t *testing.T) (*Server, *mockStore) {
@@ -2399,5 +2409,1230 @@ func TestHandleGetMessage_EngineUnsupportedFallsBackToStore(t *testing.T) {
 	}
 	if resp["subject"] != "Test Subject" {
 		t.Errorf("subject = %q, want %q (store path response)", resp["subject"], "Test Subject")
+	}
+}
+
+func TestHandleGetMessageByRFC822ID(t *testing.T) {
+	srv, store := newTestServerWithMockStore(t)
+	// Realistic Gmail Message-IDs carry `$`, `@`, `<`, `>` and sometimes
+	// `+`, `=`. All require percent-encoding in URLs. The handler must
+	// decode the path segment before hitting the store — chi.URLParam
+	// returns the raw encoded value, not the decoded one. This test
+	// locks that behavior.
+	store.rfc822Index = map[string]int64{
+		"<017e01dce2ea$5bc034e0$13409ea0$@velawood.com>": 1,
+		"<CAOh-abc@mail.example.com>":                    1,
+	}
+
+	t.Run("hit with simple < > @ encoding", func(t *testing.T) {
+		req := httptest.NewRequest("GET",
+			"/api/v1/messages/by-rfc822-id/%3CCAOh-abc%40mail.example.com%3E", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		var resp map[string]interface{}
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if got := resp["id"]; got != float64(1) {
+			t.Errorf("id = %v, want 1", got)
+		}
+	})
+
+	t.Run("hit when id contains $ (must be percent-decoded)", func(t *testing.T) {
+		// %24 = $ — Outlook-style Message-IDs use $ as a separator and
+		// have to round-trip through PathUnescape. Without the unescape
+		// the store sees the literal %24 and 404s. Regression for the
+		// real-data smoke test that surfaced this.
+		req := httptest.NewRequest("GET",
+			"/api/v1/messages/by-rfc822-id/%3C017e01dce2ea%245bc034e0%2413409ea0%24%40velawood.com%3E", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (regression: chi.URLParam returns raw, unescape needed); body=%s",
+				w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("miss returns 404 JSON", func(t *testing.T) {
+		req := httptest.NewRequest("GET",
+			"/api/v1/messages/by-rfc822-id/%3Cnope%40example.com%3E", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want 404", w.Code)
+		}
+		ct := w.Header().Get("Content-Type")
+		if !strings.HasPrefix(ct, "application/json") {
+			t.Errorf("Content-Type = %q, want application/json prefix", ct)
+		}
+		var resp map[string]interface{}
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode 404: %v", err)
+		}
+		if resp["error"] != "not_found" {
+			t.Errorf("error = %v, want not_found", resp["error"])
+		}
+	})
+}
+
+func TestHandleMessageBody(t *testing.T) {
+	t.Run("format=text returns plaintext body", func(t *testing.T) {
+		srv, store := newTestServerWithMockStore(t)
+		store.bodies = map[int64][2]string{
+			1: {"hello text", ""},
+		}
+
+		req := httptest.NewRequest("GET", "/api/v1/messages/1/body?format=text", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		if ct := w.Header().Get("Content-Type"); ct != "text/plain; charset=utf-8" {
+			t.Errorf("Content-Type = %q, want text/plain; charset=utf-8", ct)
+		}
+		if got := w.Body.String(); got != "hello text" {
+			t.Errorf("body = %q, want %q", got, "hello text")
+		}
+	})
+
+	t.Run("format=html returns HTML body verbatim", func(t *testing.T) {
+		srv, store := newTestServerWithMockStore(t)
+		store.bodies = map[int64][2]string{
+			1: {"", "<p>hello</p>"},
+		}
+
+		req := httptest.NewRequest("GET", "/api/v1/messages/1/body?format=html", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		if ct := w.Header().Get("Content-Type"); ct != "text/html; charset=utf-8" {
+			t.Errorf("Content-Type = %q, want text/html; charset=utf-8", ct)
+		}
+		if got := w.Body.String(); got != "<p>hello</p>" {
+			t.Errorf("body = %q, want %q", got, "<p>hello</p>")
+		}
+	})
+
+	t.Run("format=html wraps plain text when no HTML body exists", func(t *testing.T) {
+		srv, store := newTestServerWithMockStore(t)
+		store.bodies = map[int64][2]string{
+			1: {"a < b & c > d", ""},
+		}
+
+		req := httptest.NewRequest("GET", "/api/v1/messages/1/body?format=html", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		got := w.Body.String()
+		want := "<pre>a &lt; b &amp; c &gt; d</pre>"
+		if got != want {
+			t.Errorf("body = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("no format defaults to html when HTML present, text otherwise", func(t *testing.T) {
+		srv, store := newTestServerWithMockStore(t)
+		store.bodies = map[int64][2]string{
+			1: {"plain only", ""},
+		}
+
+		req := httptest.NewRequest("GET", "/api/v1/messages/1/body", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if ct := w.Header().Get("Content-Type"); ct != "text/plain; charset=utf-8" {
+			t.Errorf("default Content-Type for text-only = %q, want text/plain", ct)
+		}
+
+		store.bodies = map[int64][2]string{
+			1: {"", "<b>html</b>"},
+		}
+		req2 := httptest.NewRequest("GET", "/api/v1/messages/1/body", nil)
+		w2 := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w2, req2)
+		if ct := w2.Header().Get("Content-Type"); ct != "text/html; charset=utf-8" {
+			t.Errorf("default Content-Type for html-present = %q, want text/html", ct)
+		}
+	})
+
+	t.Run("invalid format → 400", func(t *testing.T) {
+		srv, _ := newTestServerWithMockStore(t)
+		req := httptest.NewRequest("GET", "/api/v1/messages/1/body?format=xml", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", w.Code)
+		}
+	})
+
+	t.Run("unknown id → 404 JSON", func(t *testing.T) {
+		srv, _ := newTestServerWithMockStore(t)
+		req := httptest.NewRequest("GET", "/api/v1/messages/9999/body", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", w.Code)
+		}
+	})
+}
+
+func TestHandleGetThread(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	t1 := mustParseTime(t, "2026-05-12T10:00:00Z")
+	t2 := mustParseTime(t, "2026-05-12T11:00:00Z")
+	ms.threads = map[int64]*store.APIThread{
+		4421: {
+			ID:           4421,
+			Subject:      "RE: Docusign update",
+			MessageCount: 2,
+			Participants: []store.APIThreadParticipant{
+				{ID: 10, Name: "Alice", Address: "alice@example.com"},
+				{ID: 11, Address: "bob@example.com"},
+			},
+			Messages: []store.APIThreadMessage{
+				{ID: 11122, FromName: "Alice", From: "alice@example.com", SentAt: t1, Snippet: "Hi"},
+				{ID: 11134, From: "bob@example.com", SentAt: t2, Snippet: "Reply"},
+			},
+		},
+	}
+
+	t.Run("hit", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v1/threads/4421", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		var resp ThreadResponse
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.ID != 4421 || resp.Subject != "RE: Docusign update" {
+			t.Errorf("thread header = (%d, %q)", resp.ID, resp.Subject)
+		}
+		if resp.MessageCount != 2 || len(resp.Messages) != 2 {
+			t.Errorf("MessageCount=%d, Messages=%d", resp.MessageCount, len(resp.Messages))
+		}
+		if len(resp.Participants) != 2 {
+			t.Errorf("participants = %d, want 2", len(resp.Participants))
+		}
+		if resp.Messages[0].SentAt != "2026-05-12T10:00:00Z" {
+			t.Errorf("first message sent_at = %q", resp.Messages[0].SentAt)
+		}
+	})
+
+	t.Run("miss → 404 JSON", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v1/threads/9999", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", w.Code)
+		}
+		var resp map[string]interface{}
+		_ = json.NewDecoder(w.Body).Decode(&resp)
+		if resp["error"] != "not_found" {
+			t.Errorf("error = %v, want not_found", resp["error"])
+		}
+	})
+
+	t.Run("non-numeric id → 400 JSON", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v1/threads/abc", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", w.Code)
+		}
+	})
+}
+
+func TestHandleThreadView_HTML(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	ms.threads = map[int64]*store.APIThread{
+		1: {
+			ID:           1,
+			Subject:      "Hello world",
+			MessageCount: 1,
+			Messages: []store.APIThreadMessage{
+				{ID: 11, From: "alice@example.com", FromName: "Alice",
+					SentAt: mustParseTime(t, "2026-05-12T10:00:00Z"), Snippet: "Hi"},
+			},
+		},
+	}
+
+	t.Run("hit renders HTML", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/t/1", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+			t.Errorf("Content-Type = %q, want text/html prefix", ct)
+		}
+		body := w.Body.String()
+		if !strings.Contains(body, "Hello world") {
+			t.Errorf("HTML body missing subject; got: %s", body)
+		}
+		if !strings.Contains(body, "alice@example.com") {
+			t.Errorf("HTML body missing sender; got: %s", body)
+		}
+	})
+
+	t.Run("miss renders not-found HTML, not the inbox", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/t/9999", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", w.Code)
+		}
+		body := w.Body.String()
+		if !strings.Contains(body, "not found in this corpus") {
+			t.Errorf("not-found body should call out corpus mismatch; got: %s", body)
+		}
+	})
+}
+
+func TestHandleMessageView_HTML(t *testing.T) {
+	t.Run("hit renders subject body and thread link", func(t *testing.T) {
+		srv, ms := newTestServerWithMockStore(t)
+		// Mutate the seeded message to carry a conversation id we can
+		// assert on, plus an HTML body via the bodies map.
+		ms.messages[0].ConversationID = 42
+		ms.bodies = map[int64][2]string{1: {"", "<b>Important</b>"}}
+
+		req := httptest.NewRequest("GET", "/m/1", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+			t.Errorf("Content-Type = %q, want text/html prefix", ct)
+		}
+		body := w.Body.String()
+		if !strings.Contains(body, "Test Subject") {
+			t.Errorf("HTML missing subject; got: %s", body)
+		}
+		if !strings.Contains(body, "<b>Important</b>") {
+			t.Errorf("HTML missing rendered body; got: %s", body)
+		}
+		if !strings.Contains(body, `href="/t/42"`) {
+			t.Errorf("HTML missing thread back-link; got: %s", body)
+		}
+		// Should NOT contain inbox shell markers.
+		if strings.Contains(body, "Inbox") || strings.Contains(body, "sidebar") {
+			t.Errorf("HTML leaks inbox chrome into chrome-less view; got: %s", body)
+		}
+	})
+
+	t.Run("text-only body wraps in <pre>", func(t *testing.T) {
+		srv, ms := newTestServerWithMockStore(t)
+		ms.bodies = map[int64][2]string{1: {"plain line", ""}}
+
+		req := httptest.NewRequest("GET", "/m/1", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		body := w.Body.String()
+		if !strings.Contains(body, "<pre") || !strings.Contains(body, "plain line") {
+			t.Errorf("expected <pre>-wrapped plaintext; got: %s", body)
+		}
+	})
+
+	t.Run("miss renders corpus-mismatch not-found", func(t *testing.T) {
+		srv, _ := newTestServerWithMockStore(t)
+		req := httptest.NewRequest("GET", "/m/9999", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", w.Code)
+		}
+		if !strings.Contains(w.Body.String(), "not found in this corpus") {
+			t.Errorf("missing corpus-mismatch hint")
+		}
+	})
+}
+
+// attachmentTestSetup writes a fake attachment file in the
+// content-addressed layout (<dir>/<ab>/<hash>) and returns a server that
+// will find it. Reused by content + HTML view tests.
+func attachmentTestSetup(t *testing.T, mime, bodyBytes string) (*Server, *mockStore, int64) {
+	t.Helper()
+	dir := t.TempDir()
+	hash := "abcd1234ef56" // arbitrary; first 2 chars are the prefix dir
+	relPath := filepath.Join(hash[:2], hash)
+	full := filepath.Join(dir, "attachments", relPath)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(full, []byte(bodyBytes), 0o644); err != nil {
+		t.Fatalf("write attachment: %v", err)
+	}
+
+	srv, ms := newTestServerWithMockStore(t)
+	srv.cfg.Data.DataDir = dir
+	const attID int64 = 7
+	ms.attachmentsByID = map[int64]*store.APIAttachmentDetail{
+		attID: {
+			ID:          attID,
+			MessageID:   1,
+			Filename:    "report.pdf",
+			MimeType:    mime,
+			Size:        int64(len(bodyBytes)),
+			ContentHash: hash,
+			StoragePath: relPath,
+		},
+	}
+	return srv, ms, attID
+}
+
+func TestHandleGetAttachment_JSON(t *testing.T) {
+	srv, _, id := attachmentTestSetup(t, "application/pdf", "%PDF-1.4 fake")
+
+	req := httptest.NewRequest("GET", fmt.Sprintf("/api/v1/attachments/%d", id), nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp AttachmentResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.ID != id || resp.MessageID != 1 || resp.MimeType != "application/pdf" {
+		t.Errorf("unexpected payload: %+v", resp)
+	}
+}
+
+func TestHandleAttachmentContent(t *testing.T) {
+	t.Run("PDF served inline", func(t *testing.T) {
+		srv, _, id := attachmentTestSetup(t, "application/pdf", "%PDF-1.4 fake")
+		req := httptest.NewRequest("GET", fmt.Sprintf("/api/v1/attachments/%d/content", id), nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		if ct := w.Header().Get("Content-Type"); ct != "application/pdf" {
+			t.Errorf("Content-Type = %q, want application/pdf", ct)
+		}
+		if disp := w.Header().Get("Content-Disposition"); !strings.HasPrefix(disp, "inline;") {
+			t.Errorf("Content-Disposition = %q, want inline prefix", disp)
+		}
+	})
+
+	t.Run("HTML attachment forced to download", func(t *testing.T) {
+		srv, _, id := attachmentTestSetup(t, "text/html", "<script>alert(1)</script>")
+		req := httptest.NewRequest("GET", fmt.Sprintf("/api/v1/attachments/%d/content", id), nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		if disp := w.Header().Get("Content-Disposition"); !strings.HasPrefix(disp, "attachment;") {
+			t.Errorf("Content-Disposition = %q, want attachment prefix (XSS guard)", disp)
+		}
+	})
+
+	t.Run("SVG attachment forced to download", func(t *testing.T) {
+		srv, _, id := attachmentTestSetup(t, "image/svg+xml", "<svg onload=alert(1) />")
+		req := httptest.NewRequest("GET", fmt.Sprintf("/api/v1/attachments/%d/content", id), nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if disp := w.Header().Get("Content-Disposition"); !strings.HasPrefix(disp, "attachment;") {
+			t.Errorf("SVG should not be inline; got %q", disp)
+		}
+	})
+
+	t.Run("missing file returns 410", func(t *testing.T) {
+		srv, ms, _ := attachmentTestSetup(t, "application/pdf", "%PDF")
+		// Point to a non-existent storage path.
+		ms.attachmentsByID[7].StoragePath = "ff/missing"
+
+		req := httptest.NewRequest("GET", "/api/v1/attachments/7/content", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusGone {
+			t.Errorf("status = %d, want 410 (gone)", w.Code)
+		}
+	})
+
+	t.Run("missing id returns 404", func(t *testing.T) {
+		srv, _, _ := attachmentTestSetup(t, "application/pdf", "%PDF")
+		req := httptest.NewRequest("GET", "/api/v1/attachments/9999/content", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", w.Code)
+		}
+	})
+}
+
+func TestHandleAttachmentView_HTML(t *testing.T) {
+	t.Run("PDF preview iframes content", func(t *testing.T) {
+		srv, _, id := attachmentTestSetup(t, "application/pdf", "%PDF")
+		req := httptest.NewRequest("GET", fmt.Sprintf("/attachment/%d", id), nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		body := w.Body.String()
+		if !strings.Contains(body, "<iframe") {
+			t.Errorf("PDF preview should iframe; got: %s", body)
+		}
+		if !strings.Contains(body, "/api/v1/attachments/7/content") {
+			t.Errorf("iframe src should reference content URL; got: %s", body)
+		}
+	})
+
+	t.Run("image preview embeds img tag", func(t *testing.T) {
+		srv, _, id := attachmentTestSetup(t, "image/png", "binary")
+		req := httptest.NewRequest("GET", fmt.Sprintf("/attachment/%d", id), nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		body := w.Body.String()
+		if !strings.Contains(body, "<img") {
+			t.Errorf("image preview should use <img>; got: %s", body)
+		}
+	})
+
+	t.Run("non-safelist falls back to download CTA", func(t *testing.T) {
+		srv, _, id := attachmentTestSetup(t, "application/zip", "PK")
+		req := httptest.NewRequest("GET", fmt.Sprintf("/attachment/%d", id), nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		body := w.Body.String()
+		if strings.Contains(body, "<iframe") || strings.Contains(body, "<img") {
+			t.Errorf("zip should not preview inline; got: %s", body)
+		}
+		if !strings.Contains(body, "Download") {
+			t.Errorf("zip should show Download CTA; got: %s", body)
+		}
+	})
+}
+
+func TestHandleListLabels(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	ms.labels = []store.APILabelCount{
+		{Name: "INBOX", Count: 100},
+		{Name: "REKKIE", Count: 14},
+	}
+
+	req := httptest.NewRequest("GET", "/api/v1/labels", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var resp LabelsListResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Total != 2 || len(resp.Labels) != 2 {
+		t.Errorf("total=%d labels=%d", resp.Total, len(resp.Labels))
+	}
+	if resp.Labels[0].Name != "INBOX" || resp.Labels[0].Count != 100 {
+		t.Errorf("first label = %+v", resp.Labels[0])
+	}
+}
+
+func TestHandleListMessagesByLabel(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	ms.labelMembership = map[string][]int64{"REKKIE": {1}}
+
+	t.Run("hit returns paginated messages", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v1/labels/REKKIE/messages?limit=10", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		var resp PaginatedMessagesResponse
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.Total != 1 || resp.Limit != 10 || len(resp.Messages) != 1 {
+			t.Errorf("unexpected response: %+v", resp)
+		}
+	})
+
+	t.Run("limit is clamped to maxPageSize", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v1/labels/REKKIE/messages?limit=99999", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		var resp PaginatedMessagesResponse
+		_ = json.NewDecoder(w.Body).Decode(&resp)
+		if resp.Limit != maxPageSize {
+			t.Errorf("limit = %d, want clamped to %d", resp.Limit, maxPageSize)
+		}
+	})
+
+	t.Run("unknown label returns 200 with zero results, not 404", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v1/labels/UNKNOWN/messages", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Errorf("status = %d, want 200 (empty list)", w.Code)
+		}
+	})
+}
+
+func TestHandleGetParticipant(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	first := mustParseTime(t, "2024-01-01T00:00:00Z")
+	last := mustParseTime(t, "2026-05-13T00:00:00Z")
+	ms.participants = map[int64]*store.APIParticipant{
+		42: {
+			ID: 42, Name: "Test Sender", Address: "sender@example.com",
+			Domain: "example.com", MessageCount: 5,
+			FirstSeen: first, LastSeen: last,
+		},
+	}
+
+	t.Run("hit", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v1/participants/42", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		var resp ParticipantResponse
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.Name != "Test Sender" || resp.MessageCount != 5 {
+			t.Errorf("unexpected payload: %+v", resp)
+		}
+		if resp.FirstSeen != "2024-01-01T00:00:00Z" {
+			t.Errorf("first_seen = %q", resp.FirstSeen)
+		}
+	})
+
+	t.Run("miss → 404 JSON", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v1/participants/9999", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", w.Code)
+		}
+	})
+}
+
+func TestHandleListMessagesByParticipant(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	ms.participantMembership = map[int64][]int64{42: {1}}
+
+	req := httptest.NewRequest("GET", "/api/v1/participants/42/messages", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp PaginatedMessagesResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Total != 1 || len(resp.Messages) != 1 {
+		t.Errorf("unexpected response: %+v", resp)
+	}
+}
+
+func TestHandleLabelAndParticipantViews_HTML(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	ms.labelMembership = map[string][]int64{"REKKIE": {1}}
+	ms.participants = map[int64]*store.APIParticipant{
+		42: {ID: 42, Name: "Alice", Address: "alice@example.com",
+			MessageCount: 1, FirstSeen: mustParseTime(t, "2024-01-01T00:00:00Z"), LastSeen: mustParseTime(t, "2024-06-01T00:00:00Z")},
+	}
+	ms.participantMembership = map[int64][]int64{42: {1}}
+
+	t.Run("/l/<name> renders message list", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/l/REKKIE", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		body := w.Body.String()
+		if !strings.Contains(body, "REKKIE") {
+			t.Errorf("HTML missing label name")
+		}
+		if !strings.Contains(body, `href="/m/1"`) {
+			t.Errorf("HTML missing message back-link; got: %s", body)
+		}
+	})
+
+	t.Run("/p/<id> renders participant page", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/p/42", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		body := w.Body.String()
+		if !strings.Contains(body, "Alice") || !strings.Contains(body, "alice@example.com") {
+			t.Errorf("HTML missing participant identity; got: %s", body)
+		}
+	})
+
+	t.Run("/p/<unknown> renders not-found", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/p/9999", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", w.Code)
+		}
+	})
+}
+
+func TestHandleCorpusFingerprint(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	asOf := mustParseTime(t, "2026-05-13T15:00:00Z")
+	latest := mustParseTime(t, "2026-05-13T14:00:00Z")
+	ms.corpusFingerprint = &store.APICorpusFingerprint{
+		Fingerprint:         "sha256:cafebabe",
+		AsOf:                asOf,
+		MessageCount:        12483,
+		LatestMessageSentAt: latest,
+	}
+
+	req := httptest.NewRequest("GET", "/api/v1/corpus/fingerprint", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp CorpusFingerprintResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Fingerprint != "sha256:cafebabe" {
+		t.Errorf("fingerprint = %q", resp.Fingerprint)
+	}
+	if resp.MessageCount != 12483 {
+		t.Errorf("message_count = %d", resp.MessageCount)
+	}
+	if resp.AsOf != "2026-05-13T15:00:00Z" {
+		t.Errorf("as_of = %q", resp.AsOf)
+	}
+	if resp.LatestMessageSentAt != "2026-05-13T14:00:00Z" {
+		t.Errorf("latest_message_sent_at = %q", resp.LatestMessageSentAt)
+	}
+}
+
+func TestHandleGetMessageV2(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	deletedAt := mustParseTime(t, "2026-04-01T12:00:00Z")
+	ms.messagesV2 = map[int64]*store.APIMessageV2{
+		11134: {
+			ID:              11134,
+			RFC822MessageID: "<rfc-11134@example.com>",
+			SourceMessageID: "src-11134",
+			ThreadID:        2754,
+			AccountEmail:    "user@example.com",
+			MessageType:     "email",
+			Subject:         "Re: hello",
+			Snippet:         "first line",
+			From:            &store.APIAddress{Name: "Alice", Address: "alice@example.com"},
+			To:              []store.APIAddress{{Name: "Bob", Address: "bob@example.com"}},
+			Cc:              []store.APIAddress{{Address: "cc@example.com"}},
+			ReplyTo:         []store.APIAddress{{Address: "no-reply@example.com"}},
+			InReplyTo:       "<rfc-parent@example.com>",
+			References:      []string{"<rfc-root@example.com>", "<rfc-parent@example.com>"},
+			SentAt:          mustParseTime(t, "2026-05-12T10:00:00Z"),
+			ReceivedAt:      mustParseTime(t, "2026-05-12T10:00:05Z"),
+			Labels:          []string{"INBOX"},
+			HasAttachments:  true,
+			AttachmentCount: 1,
+			SizeBytes:       4096,
+			DeletedAt:       &deletedAt,
+			BodyText:        "plain body",
+			BodyHTML:        "<p>html body</p>",
+			Attachments: []store.APIAttachmentV2{
+				{ID: 7, Filename: "report.pdf", MimeType: "application/pdf", SizeBytes: 4096, ContentHash: "abcd"},
+			},
+		},
+	}
+
+	t.Run("structured shape matches v2 contract", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v2/messages/11134", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		if got := w.Header().Get("X-MsgVault-API"); got != "v2" {
+			t.Errorf("X-MsgVault-API = %q, want v2", got)
+		}
+
+		var resp MessageDetailV2
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+
+		if resp.ID != 11134 || resp.ThreadID != 2754 || resp.RFC822MessageID != "<rfc-11134@example.com>" {
+			t.Errorf("ids wrong: %+v", resp)
+		}
+		if resp.Account != "user@example.com" || resp.MessageType != "email" {
+			t.Errorf("account/type wrong: %+v", resp)
+		}
+		if resp.From == nil || resp.From.Address != "alice@example.com" || resp.From.Name != "Alice" {
+			t.Errorf("from wrong: %+v", resp.From)
+		}
+		if len(resp.To) != 1 || resp.To[0].Address != "bob@example.com" {
+			t.Errorf("to wrong: %+v", resp.To)
+		}
+		if resp.InReplyTo != "<rfc-parent@example.com>" || len(resp.References) != 2 {
+			t.Errorf("threading headers wrong: in_reply_to=%q references=%v",
+				resp.InReplyTo, resp.References)
+		}
+		if !resp.IsDeleted || resp.DeletedAt != "2026-04-01T12:00:00Z" {
+			t.Errorf("delete state wrong: is_deleted=%v deleted_at=%q", resp.IsDeleted, resp.DeletedAt)
+		}
+		if resp.Body.Text != "plain body" || resp.Body.HTML != "<p>html body</p>" {
+			t.Errorf("nested body wrong: %+v", resp.Body)
+		}
+		if len(resp.Attachments) != 1 || resp.Attachments[0].ID != 7 {
+			t.Errorf("attachments wrong: %+v", resp.Attachments)
+		}
+	})
+
+	t.Run("empty collections render as [] not null", func(t *testing.T) {
+		ms.messagesV2[1] = &store.APIMessageV2{ID: 1, Subject: "no recipients"}
+
+		req := httptest.NewRequest("GET", "/api/v2/messages/1", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+
+		body := w.Body.String()
+		// The canonical to/cc/bcc/labels/attachments fields must be
+		// "[]" not null — consumers iterate without nil checks.
+		for _, field := range []string{`"to":[]`, `"cc":[]`, `"bcc":[]`, `"labels":[]`, `"attachments":[]`} {
+			if !strings.Contains(body, field) {
+				t.Errorf("expected %s in response; got: %s", field, body)
+			}
+		}
+	})
+
+	t.Run("404 on miss", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v2/messages/9999", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", w.Code)
+		}
+	})
+}
+
+func TestHandleGetMessageByRFC822IDV2(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	ms.messagesV2 = map[int64]*store.APIMessageV2{
+		11134: {ID: 11134, RFC822MessageID: "<x@example.com>"},
+	}
+	ms.rfc822Index = map[string]int64{
+		"<017e01dce2ea$5bc034e0$13409ea0$@velawood.com>": 11134,
+	}
+
+	// Regression: $ in the segment must be percent-decoded — same bug
+	// as the v1 endpoint, since v2 uses the same chi.URLParam pattern.
+	req := httptest.NewRequest("GET",
+		"/api/v2/messages/by-rfc822-id/%3C017e01dce2ea%245bc034e0%2413409ea0%24%40velawood.com%3E", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp MessageDetailV2
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.ID != 11134 {
+		t.Errorf("id = %d, want 11134", resp.ID)
+	}
+}
+
+func TestHandleListMessagesV2(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	ms.structuredRecipients = map[int64]*store.APIRecipientsV2{
+		1: {
+			From: &store.APIAddress{Name: "Sender", Address: "sender@example.com"},
+			To:   []store.APIAddress{{Address: "recipient@example.com"}},
+		},
+	}
+	ms.messageMetaV2 = map[int64]*store.APIMessageMetaV2{
+		1: {
+			RFC822MessageID: "<rfc-1@example.com>",
+			SourceMessageID: "src-1",
+			AccountEmail:    "user@example.com",
+			MessageType:     "email",
+			AttachmentCount: 0,
+		},
+	}
+
+	req := httptest.NewRequest("GET", "/api/v2/messages?limit=5", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("X-MsgVault-API"); got != "v2" {
+		t.Errorf("X-MsgVault-API = %q, want v2", got)
+	}
+
+	var resp PaginatedMessagesResponseV2
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Total != 1 || resp.Limit != 5 || len(resp.Messages) != 1 {
+		t.Errorf("unexpected envelope: %+v", resp)
+	}
+	m := resp.Messages[0]
+	if m.From == nil || m.From.Address != "sender@example.com" {
+		t.Errorf("from not structured-enriched: %+v", m.From)
+	}
+	if len(m.To) != 1 || m.To[0].Address != "recipient@example.com" {
+		t.Errorf("to not structured-enriched: %+v", m.To)
+	}
+	if m.RFC822MessageID != "<rfc-1@example.com>" {
+		t.Errorf("rfc822 meta not enriched: %q", m.RFC822MessageID)
+	}
+	if m.Account != "user@example.com" {
+		t.Errorf("account meta not enriched: %q", m.Account)
+	}
+	if m.MessageType != "email" {
+		t.Errorf("message_type meta not enriched: %q", m.MessageType)
+	}
+}
+
+func TestHandleListMessagesV2_EmptyRecipientsRenderAsArrays(t *testing.T) {
+	srv, _ := newTestServerWithMockStore(t)
+	// No structuredRecipients map seeded → enrichment returns empty.
+	req := httptest.NewRequest("GET", "/api/v2/messages", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	body := w.Body.String()
+	for _, field := range []string{`"to":[]`, `"cc":[]`, `"labels":[`} {
+		if !strings.Contains(body, field) {
+			t.Errorf("expected %s in response; got: %s", field, body)
+		}
+	}
+}
+
+func TestHandleListMessagesByLabelV2(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	ms.labelMembership = map[string][]int64{"REKKIE": {1}}
+	ms.structuredRecipients = map[int64]*store.APIRecipientsV2{
+		1: {From: &store.APIAddress{Address: "from@example.com"}},
+	}
+
+	req := httptest.NewRequest("GET", "/api/v2/labels/REKKIE/messages", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var resp PaginatedMessagesResponseV2
+	_ = json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Total != 1 || len(resp.Messages) != 1 {
+		t.Errorf("envelope wrong: %+v", resp)
+	}
+	if resp.Messages[0].From == nil || resp.Messages[0].From.Address != "from@example.com" {
+		t.Errorf("from not enriched: %+v", resp.Messages[0])
+	}
+}
+
+func TestHandleListMessagesByParticipantV2(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	ms.participantMembership = map[int64][]int64{42: {1}}
+	ms.structuredRecipients = map[int64]*store.APIRecipientsV2{
+		1: {To: []store.APIAddress{{Address: "to@example.com"}}},
+	}
+
+	req := httptest.NewRequest("GET", "/api/v2/participants/42/messages", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var resp PaginatedMessagesResponseV2
+	_ = json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Total != 1 || resp.Messages[0].To[0].Address != "to@example.com" {
+		t.Errorf("envelope wrong: %+v", resp)
+	}
+}
+
+func TestHandleSearchV2(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	ms.structuredRecipients = map[int64]*store.APIRecipientsV2{
+		1: {From: &store.APIAddress{Address: "sender@example.com"}},
+	}
+
+	t.Run("missing q → 400", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v2/search", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", w.Code)
+		}
+	})
+
+	t.Run("hit returns v2 summaries", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v2/search?q=anything", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		var resp PaginatedMessagesResponseV2
+		_ = json.NewDecoder(w.Body).Decode(&resp)
+		if len(resp.Messages) == 0 || resp.Messages[0].From == nil {
+			t.Errorf("envelope wrong: %+v", resp)
+		}
+	})
+}
+
+func TestHandleGetThreadV2(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	ms.threads = map[int64]*store.APIThread{
+		4421: {
+			ID: 4421, Subject: "Re: hello", MessageCount: 1,
+			Participants: []store.APIThreadParticipant{
+				{ID: 10, Name: "Alice", Address: "alice@example.com"},
+			},
+			Messages: []store.APIThreadMessage{
+				{ID: 1, From: "alice@example.com", FromName: "Alice",
+					SentAt: mustParseTime(t, "2026-05-12T10:00:00Z"), Snippet: "Hi"},
+			},
+		},
+	}
+	ms.structuredRecipients = map[int64]*store.APIRecipientsV2{
+		1: {
+			From: &store.APIAddress{Name: "Alice", Address: "alice@example.com"},
+			To:   []store.APIAddress{{Name: "Bob", Address: "bob@example.com"}},
+		},
+	}
+
+	req := httptest.NewRequest("GET", "/api/v2/threads/4421", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("X-MsgVault-API"); got != "v2" {
+		t.Errorf("X-MsgVault-API = %q, want v2", got)
+	}
+
+	var resp ThreadResponseV2
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.ID != 4421 || resp.MessageCount != 1 || len(resp.Messages) != 1 {
+		t.Errorf("envelope wrong: %+v", resp)
+	}
+	m := resp.Messages[0]
+	if m.From == nil || m.From.Address != "alice@example.com" || m.From.Name != "Alice" {
+		t.Errorf("thread message from not enriched: %+v", m.From)
+	}
+	if len(m.To) != 1 || m.To[0].Address != "bob@example.com" {
+		t.Errorf("thread message to not enriched: %+v", m.To)
+	}
+}
+
+func TestHandleGetAttachmentV2(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	ms.attachmentsV2 = map[int64]*store.APIAttachmentDetailV2{
+		7: {
+			ID: 7, MessageID: 11134, ThreadID: 2754,
+			AccountEmail: "user@example.com",
+			Filename:     "report.pdf", MimeType: "application/pdf",
+			SizeBytes: 4096, ContentHash: "abcd",
+		},
+		8: {
+			ID: 8, MessageID: 11135, ThreadID: 2754,
+			AccountEmail: "user@example.com",
+			Filename:     "evil.html", MimeType: "text/html",
+			SizeBytes: 1024,
+		},
+	}
+
+	t.Run("PDF reports inline_disposition=true", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v2/attachments/7", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		if got := w.Header().Get("X-MsgVault-API"); got != "v2" {
+			t.Errorf("X-MsgVault-API = %q, want v2", got)
+		}
+		var resp AttachmentResponseV2
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.ID != 7 || resp.MessageID != 11134 || resp.ThreadID != 2754 {
+			t.Errorf("ids wrong: %+v", resp)
+		}
+		if resp.Account != "user@example.com" {
+			t.Errorf("account = %q", resp.Account)
+		}
+		if !resp.InlineDisposition {
+			t.Errorf("PDF must report inline_disposition=true")
+		}
+	})
+
+	t.Run("HTML attachment reports inline_disposition=false", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v2/attachments/8", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		var resp AttachmentResponseV2
+		_ = json.NewDecoder(w.Body).Decode(&resp)
+		if resp.InlineDisposition {
+			t.Errorf("HTML must report inline_disposition=false (XSS guard)")
+		}
+	})
+
+	t.Run("miss returns 404 JSON", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v2/attachments/9999", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", w.Code)
+		}
+	})
+}
+
+func TestHandleGetParticipantV2(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	first := mustParseTime(t, "2024-01-01T00:00:00Z")
+	last := mustParseTime(t, "2026-05-13T00:00:00Z")
+	ms.participantsV2 = map[int64]*store.APIParticipantV2{
+		42: {
+			ID: 42, Name: "User", Address: "user@example.com",
+			Domain: "example.com", MessageCount: 100,
+			FirstSeen: first, LastSeen: last,
+			IsUserAccount: true,
+		},
+		43: {
+			ID: 43, Name: "External", Address: "ext@somewhere.com",
+			Domain: "somewhere.com", MessageCount: 5,
+			IsUserAccount: false,
+		},
+	}
+
+	t.Run("user-account participant flagged", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v2/participants/42", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		if got := w.Header().Get("X-MsgVault-API"); got != "v2" {
+			t.Errorf("X-MsgVault-API = %q, want v2", got)
+		}
+		var resp ParticipantResponseV2
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if !resp.IsUserAccount {
+			t.Errorf("expected is_user_account=true for synced address")
+		}
+		if resp.FirstSeen != "2024-01-01T00:00:00Z" {
+			t.Errorf("first_seen = %q", resp.FirstSeen)
+		}
+	})
+
+	t.Run("external participant not flagged", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v2/participants/43", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		var resp ParticipantResponseV2
+		_ = json.NewDecoder(w.Body).Decode(&resp)
+		if resp.IsUserAccount {
+			t.Errorf("external participant should not be flagged as user account")
+		}
+	})
+
+	t.Run("miss returns 404 JSON", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v2/participants/9999", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", w.Code)
+		}
+	})
+}
+
+func TestV2RoutesStampV2VersionHeader(t *testing.T) {
+	// Sanity check: the global v1 header middleware must be overridden
+	// on /api/v2 routes by v2APIVersionHeader. A v2 endpoint that
+	// reports X-MsgVault-API: v1 is silently lying about its contract.
+	srv, ms := newTestServerWithMockStore(t)
+	ms.messagesV2 = map[int64]*store.APIMessageV2{1: {ID: 1}}
+
+	req := httptest.NewRequest("GET", "/api/v2/messages/1", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if got := w.Header().Get("X-MsgVault-API"); got != "v2" {
+		t.Errorf("X-MsgVault-API = %q, want v2", got)
+	}
+
+	// v1 endpoint should still report v1.
+	req2 := httptest.NewRequest("GET", "/api/v1/messages/1", nil)
+	w2 := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w2, req2)
+	if got := w2.Header().Get("X-MsgVault-API"); got != "v1" {
+		t.Errorf("v1 path X-MsgVault-API = %q, want v1", got)
+	}
+}
+
+func TestHandleCorpusFingerprint_StableAcrossCalls(t *testing.T) {
+	// Real-store smoke check: two consecutive calls without any sync
+	// in between must return the same fingerprint. Uses the mock that
+	// echoes back what GetCorpusFingerprint produced — equivalent to
+	// asserting the handler doesn't introduce its own per-call entropy.
+	srv, ms := newTestServerWithMockStore(t)
+	ms.corpusFingerprint = &store.APICorpusFingerprint{
+		Fingerprint:  "sha256:deadbeef",
+		AsOf:         mustParseTime(t, "2026-05-13T15:00:00Z"),
+		MessageCount: 100,
+	}
+
+	get := func() string {
+		req := httptest.NewRequest("GET", "/api/v1/corpus/fingerprint", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		var r CorpusFingerprintResponse
+		_ = json.NewDecoder(w.Body).Decode(&r)
+		return r.Fingerprint
+	}
+
+	if a, b := get(), get(); a != b {
+		t.Errorf("fingerprint drifted across calls: %q vs %q", a, b)
 	}
 }

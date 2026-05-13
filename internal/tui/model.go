@@ -149,8 +149,8 @@ type Model struct {
 	selection selectionState
 
 	// Modal state
-	modal           modalType
-	modalCursor     int                // Cursor position within modal (for selector modals)
+	modal       modalType
+	modalCursor int    // Cursor position within modal (for selector modals)
 	modalResult string // Result message to display
 	helpScroll  int    // Scroll offset for help modal
 

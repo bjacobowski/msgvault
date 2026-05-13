@@ -187,4 +187,5 @@ func init() {
 // with the given root command. The agent and full-surface binaries
 // call this to opt this command in.
 func RegisterExportAttachment(root *cobra.Command) {
-	root.AddCommand(exportAttachmentCmd)}
+	root.AddCommand(exportAttachmentCmd)
+}

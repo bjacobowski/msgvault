@@ -333,4 +333,5 @@ func promptYesNo(reader *bufio.Reader, prompt string) bool {
 // with the given root command. The agent and full-surface binaries
 // call this to opt this command in.
 func RegisterSetup(root *cobra.Command) {
-	root.AddCommand(setupCmd)}
+	root.AddCommand(setupCmd)
+}

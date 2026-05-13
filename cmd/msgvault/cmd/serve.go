@@ -291,6 +291,66 @@ func (a *storeAPIAdapter) GetMessage(id int64) (*api.APIMessage, error) {
 	return a.store.GetMessage(id)
 }
 
+func (a *storeAPIAdapter) GetMessageByRFC822ID(rfc822ID string) (*api.APIMessage, error) {
+	return a.store.GetMessageByRFC822ID(rfc822ID)
+}
+
+func (a *storeAPIAdapter) GetMessageBodies(id int64) (text, html string, err error) {
+	return a.store.GetMessageBodies(id)
+}
+
+func (a *storeAPIAdapter) GetThread(id int64) (*store.APIThread, error) {
+	return a.store.GetThread(id)
+}
+
+func (a *storeAPIAdapter) GetAttachmentByID(id int64) (*store.APIAttachmentDetail, error) {
+	return a.store.GetAttachmentByID(id)
+}
+
+func (a *storeAPIAdapter) ListLabels() ([]store.APILabelCount, error) {
+	return a.store.ListLabels()
+}
+
+func (a *storeAPIAdapter) ListMessagesByLabel(name string, offset, limit int) ([]api.APIMessage, int64, error) {
+	return a.store.ListMessagesByLabel(name, offset, limit)
+}
+
+func (a *storeAPIAdapter) GetParticipantByID(id int64) (*store.APIParticipant, error) {
+	return a.store.GetParticipantByID(id)
+}
+
+func (a *storeAPIAdapter) ListMessagesByParticipant(id int64, offset, limit int) ([]api.APIMessage, int64, error) {
+	return a.store.ListMessagesByParticipant(id, offset, limit)
+}
+
+func (a *storeAPIAdapter) GetCorpusFingerprint() (*store.APICorpusFingerprint, error) {
+	return a.store.GetCorpusFingerprint()
+}
+
+func (a *storeAPIAdapter) GetMessageV2(id int64) (*store.APIMessageV2, error) {
+	return a.store.GetMessageV2(id)
+}
+
+func (a *storeAPIAdapter) GetMessageV2ByRFC822ID(rfc822ID string) (*store.APIMessageV2, error) {
+	return a.store.GetMessageV2ByRFC822ID(rfc822ID)
+}
+
+func (a *storeAPIAdapter) BatchStructuredRecipients(ids []int64) (map[int64]*store.APIRecipientsV2, error) {
+	return a.store.BatchStructuredRecipients(ids)
+}
+
+func (a *storeAPIAdapter) BatchMessageMetaV2(ids []int64) (map[int64]*store.APIMessageMetaV2, error) {
+	return a.store.BatchMessageMetaV2(ids)
+}
+
+func (a *storeAPIAdapter) GetAttachmentByIDV2(id int64) (*store.APIAttachmentDetailV2, error) {
+	return a.store.GetAttachmentByIDV2(id)
+}
+
+func (a *storeAPIAdapter) GetParticipantByIDV2(id int64) (*store.APIParticipantV2, error) {
+	return a.store.GetParticipantByIDV2(id)
+}
+
 func (a *storeAPIAdapter) GetMessagesSummariesByIDs(ids []int64) ([]api.APIMessage, error) {
 	return a.store.GetMessagesSummariesByIDs(ids)
 }
@@ -449,4 +509,5 @@ func runScheduledSync(ctx context.Context, email string, s *store.Store, getOAut
 // with the given root command. The agent and full-surface binaries
 // call this to opt this command in.
 func RegisterServe(root *cobra.Command) {
-	root.AddCommand(serveCmd)}
+	root.AddCommand(serveCmd)
+}

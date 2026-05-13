@@ -352,4 +352,5 @@ func init() {
 // with the given root command. The agent and full-surface binaries
 // call this to opt this command in.
 func RegisterShowMessage(root *cobra.Command) {
-	root.AddCommand(showMessageCmd)}
+	root.AddCommand(showMessageCmd)
+}

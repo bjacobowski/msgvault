@@ -1,13 +1,16 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html/template"
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -395,6 +398,865 @@ func (s *Server) handleGetMessage(w http.ResponseWriter, r *http.Request) {
 	detail.Attachments = attachments
 
 	writeJSON(w, http.StatusOK, detail)
+}
+
+// handleGetMessageByRFC822ID looks up a message by its RFC822 Message-ID
+// header. URL path: /api/v1/messages/by-rfc822-id/{rfc822_id} where
+// {rfc822_id} must be percent-encoded by the caller.
+//
+// chi.URLParam returns the *encoded* path segment — Go's net/http
+// decodes r.URL.Path, but chi v5 routes against r.URL.RawPath and the
+// URLParam value is the raw matched bytes. Real Gmail Message-IDs
+// commonly contain `$`, `@`, `<`, `>`, `+`, `=` which all require
+// percent-encoding; without an explicit unescape here the store
+// lookup tries to match the literal `%3C...%3E` value and 404s.
+//
+// Returns the same MessageDetail shape as /messages/{id}, or 404 with
+// a consistent JSON error body when no message matches.
+//
+// The query engine doesn't have a by-rfc822 entry point; this handler
+// resolves through the store only.
+func (s *Server) handleGetMessageByRFC822ID(w http.ResponseWriter, r *http.Request) {
+	raw := chi.URLParam(r, "rfc822_id")
+	rfcID, err := url.PathUnescape(raw)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_rfc822_id", "RFC822 Message-ID is malformed")
+		return
+	}
+	if rfcID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_rfc822_id", "RFC822 Message-ID is required")
+		return
+	}
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
+		return
+	}
+
+	msg, err := s.store.GetMessageByRFC822ID(rfcID)
+	if err != nil {
+		s.logger.Error("failed to get message by rfc822 id", "rfc822_id", rfcID, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve message")
+		return
+	}
+	if msg == nil {
+		writeError(w, http.StatusNotFound, "not_found", "Message not found")
+		return
+	}
+
+	detail := MessageDetail{
+		MessageSummary: toMessageSummary(*msg),
+		Body:           msg.Body,
+	}
+	attachments := make([]AttachmentInfo, 0, len(msg.Attachments))
+	for _, att := range msg.Attachments {
+		attachments = append(attachments, AttachmentInfo(att))
+	}
+	detail.Attachments = attachments
+
+	writeJSON(w, http.StatusOK, detail)
+}
+
+// handleMessageBody serves the raw body of a message as text/html or
+// text/plain. Query param `format` selects the variant:
+//
+//	format=html (default when an HTML part exists) → text/html; charset=utf-8
+//	format=text (default otherwise)                → text/plain; charset=utf-8
+//
+// When only one body part exists, the other format renders a best-effort
+// fallback (text wrapped in <pre> for html requests; html served as
+// text/plain for text requests). 404 with a JSON error body when the
+// message does not exist.
+func (s *Server) handleMessageBody(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "Message ID must be a number")
+		return
+	}
+
+	format := r.URL.Query().Get("format")
+	switch format {
+	case "", "html", "text":
+		// ok
+	default:
+		writeError(w, http.StatusBadRequest, "invalid_format", "format must be html or text")
+		return
+	}
+
+	bodyText, bodyHTML, found, err := s.fetchBodies(r.Context(), id)
+	if err != nil {
+		s.logger.Error("failed to load message body", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve message body")
+		return
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "not_found", "Message not found")
+		return
+	}
+
+	if format == "" {
+		if bodyHTML != "" {
+			format = "html"
+		} else {
+			format = "text"
+		}
+	}
+
+	switch format {
+	case "html":
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		if bodyHTML != "" {
+			_, _ = w.Write([]byte(bodyHTML))
+		} else {
+			// Wrap plain text safely so browsers don't try to interpret it.
+			_, _ = w.Write([]byte("<pre>"))
+			_, _ = w.Write([]byte(htmlEscape(bodyText)))
+			_, _ = w.Write([]byte("</pre>"))
+		}
+	case "text":
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		if bodyText != "" {
+			_, _ = w.Write([]byte(bodyText))
+		} else {
+			// Best-effort fallback: serve the HTML as text — better than
+			// returning empty, lets the caller still pattern-match content.
+			_, _ = w.Write([]byte(bodyHTML))
+		}
+	}
+}
+
+// fetchBodies resolves the text and HTML body parts for a message via the
+// query engine when available, falling back to the store. The `found`
+// return distinguishes "message exists but has no body" from
+// "message does not exist".
+func (s *Server) fetchBodies(ctx context.Context, id int64) (text, html string, found bool, err error) {
+	if s.engine != nil {
+		qMsg, engErr := s.engine.GetMessage(ctx, id)
+		switch {
+		case engErr != nil && !isEngineUnsupported(engErr):
+			return "", "", false, engErr
+		case engErr == nil && qMsg == nil:
+			return "", "", false, nil
+		case engErr == nil:
+			return qMsg.BodyText, qMsg.BodyHTML, true, nil
+		}
+		// fall through on engine-unsupported
+	}
+	if s.store == nil {
+		return "", "", false, errStoreUnavailable
+	}
+	// Confirm the message exists; GetMessageBodies alone can't distinguish
+	// "no body row" from "no message at all".
+	msg, err := s.store.GetMessage(id)
+	if err != nil {
+		return "", "", false, err
+	}
+	if msg == nil {
+		return "", "", false, nil
+	}
+	t, h, err := s.store.GetMessageBodies(id)
+	if err != nil {
+		return "", "", false, err
+	}
+	return t, h, true, nil
+}
+
+// htmlEscape minimally escapes plain text for safe inclusion in an HTML
+// document. Avoids pulling html/template just to escape a body.
+func htmlEscape(s string) string {
+	replacer := strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		`"`, "&quot;",
+		"'", "&#39;",
+	)
+	return replacer.Replace(s)
+}
+
+// errStoreUnavailable is the sentinel returned by fetchBodies when neither
+// the engine nor the store can answer.
+var errStoreUnavailable = errors.New("store unavailable")
+
+// ThreadResponse is the JSON shape returned by /api/v1/threads/{id}.
+type ThreadResponse struct {
+	ID           int64                  `json:"id"`
+	Subject      string                 `json:"subject"`
+	MessageCount int64                  `json:"message_count"`
+	Participants []ThreadParticipantDTO `json:"participants"`
+	Messages     []ThreadMessageDTO     `json:"messages"`
+}
+
+// ThreadParticipantDTO names a single party in a thread.
+type ThreadParticipantDTO struct {
+	ID      int64  `json:"id"`
+	Name    string `json:"name,omitempty"`
+	Address string `json:"address"`
+}
+
+// ThreadMessageDTO is the compact summary embedded under a thread response.
+type ThreadMessageDTO struct {
+	ID      int64         `json:"id"`
+	SentAt  string        `json:"sent_at"`
+	From    ThreadFromDTO `json:"from"`
+	Snippet string        `json:"snippet,omitempty"`
+}
+
+// ThreadFromDTO carries the per-message sender address and display name.
+type ThreadFromDTO struct {
+	Name    string `json:"name,omitempty"`
+	Address string `json:"address"`
+}
+
+// handleGetThread serves the JSON thread view. 404 with a consistent JSON
+// error body when no thread matches the id.
+func (s *Server) handleGetThread(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "Thread ID must be a number")
+		return
+	}
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
+		return
+	}
+
+	th, err := s.store.GetThread(id)
+	if err != nil {
+		s.logger.Error("failed to get thread", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve thread")
+		return
+	}
+	if th == nil {
+		writeError(w, http.StatusNotFound, "not_found", "Thread not found")
+		return
+	}
+
+	resp := ThreadResponse{
+		ID:           th.ID,
+		Subject:      th.Subject,
+		MessageCount: th.MessageCount,
+		Participants: make([]ThreadParticipantDTO, 0, len(th.Participants)),
+		Messages:     make([]ThreadMessageDTO, 0, len(th.Messages)),
+	}
+	for _, p := range th.Participants {
+		resp.Participants = append(resp.Participants, ThreadParticipantDTO{
+			ID:      p.ID,
+			Name:    p.Name,
+			Address: p.Address,
+		})
+	}
+	for _, m := range th.Messages {
+		resp.Messages = append(resp.Messages, ThreadMessageDTO{
+			ID:      m.ID,
+			SentAt:  m.SentAt.UTC().Format(time.RFC3339),
+			From:    ThreadFromDTO{Name: m.FromName, Address: m.From},
+			Snippet: m.Snippet,
+		})
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// CorpusFingerprintResponse is the JSON shape for
+// /api/v1/corpus/fingerprint. The fingerprint changes on every sync but
+// stays stable between syncs — useful for "did the corpus change at
+// all" comparisons, not for per-citation stability (see PLAN C1).
+type CorpusFingerprintResponse struct {
+	Fingerprint         string `json:"fingerprint"`
+	AsOf                string `json:"as_of"`
+	MessageCount        int64  `json:"message_count"`
+	LatestMessageSentAt string `json:"latest_message_sent_at,omitempty"`
+}
+
+// handleCorpusFingerprint serves the cheap drift digest.
+func (s *Server) handleCorpusFingerprint(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
+		return
+	}
+	fp, err := s.store.GetCorpusFingerprint()
+	if err != nil {
+		s.logger.Error("failed to compute corpus fingerprint", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to compute fingerprint")
+		return
+	}
+	// GetCorpusFingerprint always returns a non-nil result in practice —
+	// COUNT yields a single row even on an empty corpus — so a nil here
+	// would be a store-layer bug rather than an expected state.
+	if fp == nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Empty fingerprint")
+		return
+	}
+
+	resp := CorpusFingerprintResponse{
+		Fingerprint:  fp.Fingerprint,
+		AsOf:         fp.AsOf.Format(time.RFC3339),
+		MessageCount: fp.MessageCount,
+	}
+	if !fp.LatestMessageSentAt.IsZero() {
+		resp.LatestMessageSentAt = fp.LatestMessageSentAt.UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// LabelCountDTO is one row of the /api/v1/labels listing.
+type LabelCountDTO struct {
+	Name  string `json:"name"`
+	Count int64  `json:"count"`
+}
+
+// LabelsListResponse wraps the labels list with the total count.
+type LabelsListResponse struct {
+	Total  int             `json:"total"`
+	Labels []LabelCountDTO `json:"labels"`
+}
+
+// PaginatedMessagesResponse is the shape used by label and participant
+// message listings. Distinct from the page/page_size shape used by
+// /api/v1/messages because these endpoints take limit/offset directly.
+type PaginatedMessagesResponse struct {
+	Total    int64            `json:"total"`
+	Offset   int              `json:"offset"`
+	Limit    int              `json:"limit"`
+	Messages []MessageSummary `json:"messages"`
+}
+
+// ParticipantResponse is the JSON shape for /api/v1/participants/{id}.
+type ParticipantResponse struct {
+	ID           int64  `json:"id"`
+	Name         string `json:"name,omitempty"`
+	Address      string `json:"address"`
+	Domain       string `json:"domain,omitempty"`
+	MessageCount int64  `json:"message_count"`
+	FirstSeen    string `json:"first_seen,omitempty"`
+	LastSeen     string `json:"last_seen,omitempty"`
+}
+
+// parseLimitOffset reads limit and offset query params, clamping limit
+// to [1, maxPageSize] (default 50) and offset to >= 0.
+func parseLimitOffset(r *http.Request) (limit, offset int) {
+	limit, _ = strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit < 1 {
+		limit = 50
+	}
+	if limit > maxPageSize {
+		limit = maxPageSize
+	}
+	offset, _ = strconv.Atoi(r.URL.Query().Get("offset"))
+	if offset < 0 {
+		offset = 0
+	}
+	return limit, offset
+}
+
+// handleListLabels serves the global labels list with per-label counts.
+func (s *Server) handleListLabels(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
+		return
+	}
+	labels, err := s.store.ListLabels()
+	if err != nil {
+		s.logger.Error("failed to list labels", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve labels")
+		return
+	}
+	out := make([]LabelCountDTO, 0, len(labels))
+	for _, l := range labels {
+		out = append(out, LabelCountDTO{Name: l.Name, Count: l.Count})
+	}
+	writeJSON(w, http.StatusOK, LabelsListResponse{Total: len(out), Labels: out})
+}
+
+// handleListMessagesByLabel serves a paginated list of messages tagged
+// with the given label name.
+func (s *Server) handleListMessagesByLabel(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "invalid_name", "Label name is required")
+		return
+	}
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
+		return
+	}
+	limit, offset := parseLimitOffset(r)
+
+	messages, total, err := s.store.ListMessagesByLabel(name, offset, limit)
+	if err != nil {
+		s.logger.Error("failed to list messages by label", "name", name, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve messages")
+		return
+	}
+	summaries := make([]MessageSummary, len(messages))
+	for i, m := range messages {
+		summaries[i] = toMessageSummary(m)
+	}
+	writeJSON(w, http.StatusOK, PaginatedMessagesResponse{
+		Total: total, Offset: offset, Limit: limit, Messages: summaries,
+	})
+}
+
+// handleGetParticipant serves the JSON detail for a single participant.
+func (s *Server) handleGetParticipant(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "Participant ID must be a number")
+		return
+	}
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
+		return
+	}
+
+	p, err := s.store.GetParticipantByID(id)
+	if err != nil {
+		s.logger.Error("failed to get participant", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve participant")
+		return
+	}
+	if p == nil {
+		writeError(w, http.StatusNotFound, "not_found", "Participant not found")
+		return
+	}
+
+	resp := ParticipantResponse{
+		ID:           p.ID,
+		Name:         p.Name,
+		Address:      p.Address,
+		Domain:       p.Domain,
+		MessageCount: p.MessageCount,
+	}
+	if !p.FirstSeen.IsZero() {
+		resp.FirstSeen = p.FirstSeen.UTC().Format(time.RFC3339)
+	}
+	if !p.LastSeen.IsZero() {
+		resp.LastSeen = p.LastSeen.UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleListMessagesByParticipant returns paginated messages involving the
+// given participant in any recipient_type (from, to, cc, bcc).
+func (s *Server) handleListMessagesByParticipant(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "Participant ID must be a number")
+		return
+	}
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
+		return
+	}
+	limit, offset := parseLimitOffset(r)
+
+	messages, total, err := s.store.ListMessagesByParticipant(id, offset, limit)
+	if err != nil {
+		s.logger.Error("failed to list messages by participant", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve messages")
+		return
+	}
+	summaries := make([]MessageSummary, len(messages))
+	for i, m := range messages {
+		summaries[i] = toMessageSummary(m)
+	}
+	writeJSON(w, http.StatusOK, PaginatedMessagesResponse{
+		Total: total, Offset: offset, Limit: limit, Messages: summaries,
+	})
+}
+
+// handleLabelView serves the HTML view at /l/{name}.
+func (s *Server) handleLabelView(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	if name == "" {
+		writeHTMLNotFound(w, "Label name is required")
+		return
+	}
+	if s.store == nil {
+		writeHTMLError(w, http.StatusServiceUnavailable, "Database not available")
+		return
+	}
+	limit, offset := parseLimitOffset(r)
+
+	messages, total, err := s.store.ListMessagesByLabel(name, offset, limit)
+	if err != nil {
+		s.logger.Error("failed to list messages by label", "name", name, "error", err)
+		writeHTMLError(w, http.StatusInternalServerError, "Failed to retrieve messages")
+		return
+	}
+
+	data := labelViewData{
+		Name:   name,
+		Total:  total,
+		Offset: offset,
+		Limit:  limit,
+	}
+	for _, m := range messages {
+		data.Messages = append(data.Messages, labelMessageRow{
+			ID:      m.ID,
+			Subject: m.Subject,
+			From:    m.From,
+			SentAt:  m.SentAt.UTC().Format("2006-01-02 15:04 MST"),
+			Snippet: m.Snippet,
+		})
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	if err := labelViewTemplate.Execute(w, data); err != nil {
+		s.logger.Error("failed to render label template", "name", name, "error", err)
+	}
+}
+
+// handleParticipantView serves the HTML view at /p/{id}.
+func (s *Server) handleParticipantView(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeHTMLNotFound(w, "Invalid participant id")
+		return
+	}
+	if s.store == nil {
+		writeHTMLError(w, http.StatusServiceUnavailable, "Database not available")
+		return
+	}
+
+	p, err := s.store.GetParticipantByID(id)
+	if err != nil {
+		s.logger.Error("failed to get participant for HTML view", "id", id, "error", err)
+		writeHTMLError(w, http.StatusInternalServerError, "Failed to retrieve participant")
+		return
+	}
+	if p == nil {
+		writeHTMLNotFound(w, fmt.Sprintf("Participant %d not found in this corpus", id))
+		return
+	}
+
+	limit, offset := parseLimitOffset(r)
+	messages, _, err := s.store.ListMessagesByParticipant(id, offset, limit)
+	if err != nil {
+		s.logger.Error("failed to list messages by participant", "id", id, "error", err)
+		writeHTMLError(w, http.StatusInternalServerError, "Failed to retrieve messages")
+		return
+	}
+
+	data := participantViewData{
+		ID:           p.ID,
+		Name:         p.Name,
+		Address:      p.Address,
+		Domain:       p.Domain,
+		MessageCount: p.MessageCount,
+		Offset:       offset,
+		Limit:        limit,
+	}
+	if !p.FirstSeen.IsZero() {
+		data.FirstSeen = p.FirstSeen.UTC().Format("2006-01-02")
+	}
+	if !p.LastSeen.IsZero() {
+		data.LastSeen = p.LastSeen.UTC().Format("2006-01-02")
+	}
+	for _, m := range messages {
+		data.Messages = append(data.Messages, labelMessageRow{
+			ID:      m.ID,
+			Subject: m.Subject,
+			From:    m.From,
+			SentAt:  m.SentAt.UTC().Format("2006-01-02 15:04 MST"),
+			Snippet: m.Snippet,
+		})
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	if err := participantViewTemplate.Execute(w, data); err != nil {
+		s.logger.Error("failed to render participant template", "id", id, "error", err)
+	}
+}
+
+// AttachmentResponse is the JSON metadata for /api/v1/attachments/{id}.
+type AttachmentResponse struct {
+	ID          int64  `json:"id"`
+	MessageID   int64  `json:"message_id"`
+	Filename    string `json:"filename"`
+	MimeType    string `json:"mime"`
+	Size        int64  `json:"size_bytes"`
+	ContentHash string `json:"content_hash,omitempty"`
+}
+
+// inlineSafeMIMETypes is the safelist of attachment MIME types that may be
+// served with `Content-Disposition: inline`. Everything else is forced to
+// download to keep XSS surface flat: an HTML or SVG attachment served
+// inline could execute scripts from the msgvault origin.
+var inlineSafeMIMETypes = map[string]struct{}{
+	"application/pdf": {},
+	"image/png":       {},
+	"image/jpeg":      {},
+	"image/gif":       {},
+	"image/webp":      {},
+	"text/plain":      {},
+}
+
+// isInlineSafeMIME reports whether the given Content-Type can be served
+// with `inline` disposition. Only the type/subtype is considered; any
+// parameters (e.g. `charset=...`) are stripped.
+func isInlineSafeMIME(ct string) bool {
+	base := strings.ToLower(strings.TrimSpace(strings.SplitN(ct, ";", 2)[0]))
+	_, ok := inlineSafeMIMETypes[base]
+	return ok
+}
+
+// handleGetAttachment returns JSON metadata for an attachment.
+func (s *Server) handleGetAttachment(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "Attachment ID must be a number")
+		return
+	}
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
+		return
+	}
+
+	att, err := s.store.GetAttachmentByID(id)
+	if err != nil {
+		s.logger.Error("failed to get attachment", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve attachment")
+		return
+	}
+	if att == nil {
+		writeError(w, http.StatusNotFound, "not_found", "Attachment not found")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, AttachmentResponse{
+		ID:          att.ID,
+		MessageID:   att.MessageID,
+		Filename:    att.Filename,
+		MimeType:    att.MimeType,
+		Size:        att.Size,
+		ContentHash: att.ContentHash,
+	})
+}
+
+// handleAttachmentContent streams the attachment bytes from disk, using the
+// inline-safe MIME safelist to choose `Content-Disposition`. Range
+// requests and conditional GETs are delegated to http.ServeContent.
+func (s *Server) handleAttachmentContent(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "Attachment ID must be a number")
+		return
+	}
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
+		return
+	}
+	if s.cfg == nil {
+		writeError(w, http.StatusServiceUnavailable, "config_unavailable", "Server config missing")
+		return
+	}
+
+	att, err := s.store.GetAttachmentByID(id)
+	if err != nil {
+		s.logger.Error("failed to get attachment", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve attachment")
+		return
+	}
+	if att == nil {
+		writeError(w, http.StatusNotFound, "not_found", "Attachment not found")
+		return
+	}
+
+	fullPath := filepath.Join(s.cfg.AttachmentsDir(), filepath.FromSlash(att.StoragePath))
+	f, err := os.Open(fullPath) //nolint:gosec // path joined from server-configured root + DB-stored relative path
+	if err != nil {
+		s.logger.Warn("attachment file unavailable", "id", id, "path", fullPath, "error", err)
+		writeError(w, http.StatusGone, "content_unavailable", "Attachment file not on disk")
+		return
+	}
+	defer func() { _ = f.Close() }()
+
+	fi, err := f.Stat()
+	if err != nil {
+		s.logger.Error("attachment stat failed", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to stat attachment")
+		return
+	}
+
+	disposition := "attachment"
+	if isInlineSafeMIME(att.MimeType) {
+		disposition = "inline"
+	}
+	mt := att.MimeType
+	if mt == "" {
+		mt = "application/octet-stream"
+	}
+
+	w.Header().Set("Content-Type", mt)
+	w.Header().Set("Content-Disposition",
+		fmt.Sprintf("%s; filename=%q", disposition, sanitizeFilenameForDisposition(att.Filename)))
+	http.ServeContent(w, r, att.Filename, fi.ModTime(), f)
+}
+
+// sanitizeFilenameForDisposition strips characters that would break a
+// quoted-string in Content-Disposition. Anything fancier (RFC 5987
+// filename*) is overkill for the radical-roc use case.
+func sanitizeFilenameForDisposition(name string) string {
+	if name == "" {
+		return "attachment"
+	}
+	replacer := strings.NewReplacer("\\", "_", "\"", "_", "\r", "_", "\n", "_")
+	return replacer.Replace(name)
+}
+
+// handleAttachmentView serves the HTML preview page at /attachment/{id}.
+// PDFs and safelisted images are iframed/embedded; everything else
+// renders a download CTA.
+func (s *Server) handleAttachmentView(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeHTMLNotFound(w, "Invalid attachment id")
+		return
+	}
+	if s.store == nil {
+		writeHTMLError(w, http.StatusServiceUnavailable, "Database not available")
+		return
+	}
+
+	att, err := s.store.GetAttachmentByID(id)
+	if err != nil {
+		s.logger.Error("failed to get attachment for HTML view", "id", id, "error", err)
+		writeHTMLError(w, http.StatusInternalServerError, "Failed to retrieve attachment")
+		return
+	}
+	if att == nil {
+		writeHTMLNotFound(w, fmt.Sprintf("Attachment %d not found in this corpus", id))
+		return
+	}
+
+	data := attachmentViewData{
+		ID:         att.ID,
+		MessageID:  att.MessageID,
+		Filename:   att.Filename,
+		MimeType:   att.MimeType,
+		Size:       att.Size,
+		ContentURL: fmt.Sprintf("/api/v1/attachments/%d/content", att.ID),
+	}
+	base := strings.ToLower(strings.TrimSpace(strings.SplitN(att.MimeType, ";", 2)[0]))
+	switch {
+	case base == "application/pdf":
+		data.PreviewMode = "pdf"
+	case strings.HasPrefix(base, "image/") && isInlineSafeMIME(base):
+		data.PreviewMode = "image"
+	case base == "text/plain":
+		data.PreviewMode = "text"
+	default:
+		data.PreviewMode = "none"
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	if err := attachmentViewTemplate.Execute(w, data); err != nil {
+		s.logger.Error("failed to render attachment template", "id", id, "error", err)
+	}
+}
+
+// handleMessageView serves the HTML single-message view at /m/{id}. Reuses
+// GetMessage + GetMessageBodies to assemble a chrome-less page suitable
+// for iframe-embed in a review-app pane.
+func (s *Server) handleMessageView(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeHTMLNotFound(w, "Invalid message id")
+		return
+	}
+	if s.store == nil {
+		writeHTMLError(w, http.StatusServiceUnavailable, "Database not available")
+		return
+	}
+
+	msg, err := s.store.GetMessage(id)
+	if err != nil {
+		s.logger.Error("failed to get message for HTML view", "id", id, "error", err)
+		writeHTMLError(w, http.StatusInternalServerError, "Failed to retrieve message")
+		return
+	}
+	if msg == nil {
+		writeHTMLNotFound(w, fmt.Sprintf("Message %d not found in this corpus", id))
+		return
+	}
+
+	bodyText, bodyHTML, _, err := s.fetchBodies(r.Context(), id)
+	if err != nil {
+		s.logger.Error("failed to load body for HTML view", "id", id, "error", err)
+		writeHTMLError(w, http.StatusInternalServerError, "Failed to retrieve message body")
+		return
+	}
+
+	data := messageViewData{
+		ID:             msg.ID,
+		ConversationID: msg.ConversationID,
+		Subject:        msg.Subject,
+		From:           msg.From,
+		To:             msg.To,
+		Cc:             msg.Cc,
+		SentAt:         msg.SentAt.UTC().Format("2006-01-02 15:04 MST"),
+		BodyHTML:       template.HTML(bodyHTML), //nolint:gosec // stored-by-msgvault content
+		BodyText:       bodyText,
+	}
+	for _, att := range msg.Attachments {
+		data.Attachments = append(data.Attachments, messageAttachmentView{
+			Filename: att.Filename,
+			MimeType: att.MimeType,
+			Size:     att.Size,
+		})
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	if err := messageViewTemplate.Execute(w, data); err != nil {
+		s.logger.Error("failed to render message template", "id", id, "error", err)
+	}
+}
+
+// handleThreadView serves the HTML thread view at /t/{id} — minimal chrome,
+// no JS, no external CSS, safe to iframe-embed.
+func (s *Server) handleThreadView(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeHTMLNotFound(w, "Invalid thread id")
+		return
+	}
+	if s.store == nil {
+		writeHTMLError(w, http.StatusServiceUnavailable, "Database not available")
+		return
+	}
+
+	th, err := s.store.GetThread(id)
+	if err != nil {
+		s.logger.Error("failed to get thread for HTML view", "id", id, "error", err)
+		writeHTMLError(w, http.StatusInternalServerError, "Failed to retrieve thread")
+		return
+	}
+	if th == nil {
+		writeHTMLNotFound(w, fmt.Sprintf("Thread %d not found in this corpus", id))
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	if err := threadViewTemplate.Execute(w, th); err != nil {
+		s.logger.Error("failed to render thread template", "id", id, "error", err)
+	}
 }
 
 // handleSearch searches messages.

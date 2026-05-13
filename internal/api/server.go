@@ -27,6 +27,21 @@ type MessageStore interface {
 	GetStats() (*StoreStats, error)
 	ListMessages(offset, limit int) ([]APIMessage, int64, error)
 	GetMessage(id int64) (*APIMessage, error)
+	GetMessageByRFC822ID(rfc822ID string) (*APIMessage, error)
+	GetMessageBodies(id int64) (text, html string, err error)
+	GetThread(id int64) (*store.APIThread, error)
+	GetAttachmentByID(id int64) (*store.APIAttachmentDetail, error)
+	ListLabels() ([]store.APILabelCount, error)
+	ListMessagesByLabel(name string, offset, limit int) ([]APIMessage, int64, error)
+	GetParticipantByID(id int64) (*store.APIParticipant, error)
+	ListMessagesByParticipant(id int64, offset, limit int) ([]APIMessage, int64, error)
+	GetCorpusFingerprint() (*store.APICorpusFingerprint, error)
+	GetMessageV2(id int64) (*store.APIMessageV2, error)
+	GetMessageV2ByRFC822ID(rfc822ID string) (*store.APIMessageV2, error)
+	BatchStructuredRecipients(ids []int64) (map[int64]*store.APIRecipientsV2, error)
+	BatchMessageMetaV2(ids []int64) (map[int64]*store.APIMessageMetaV2, error)
+	GetAttachmentByIDV2(id int64) (*store.APIAttachmentDetailV2, error)
+	GetParticipantByIDV2(id int64) (*store.APIParticipantV2, error)
 	GetMessagesSummariesByIDs(ids []int64) ([]APIMessage, error)
 	SearchMessages(query string, offset, limit int) ([]APIMessage, int64, error)
 	SearchMessagesQuery(q *search.Query, offset, limit int) ([]APIMessage, int64, error)
@@ -132,13 +147,24 @@ func (s *Server) setupRouter() chi.Router {
 	// timeout (http.TimeoutHandler-style), that test will fail.
 	r.Use(chimw.Timeout(s.requestTimeout))
 
-	// CORS middleware (config-driven; disabled when no origins configured)
+	// API contract version header (radical-roc and similar consumers can
+	// pin against this).
+	r.Use(APIVersionHeaderMiddleware)
+
+	// CORS middleware (config-driven; disabled when no origins configured).
+	// When public_read is on and no origins were configured, default to "*"
+	// so file:// artifacts (Origin: null) can fetch read endpoints. The
+	// blast radius is bounded because public_read only relaxes GET/HEAD
+	// auth, and the server still defaults to loopback bind.
 	corsConfig := CORSConfig{
 		AllowedOrigins:   s.cfg.Server.CORSOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-API-Key"},
 		AllowCredentials: s.cfg.Server.CORSCredentials,
 		MaxAge:           s.cfg.Server.CORSMaxAge,
+	}
+	if s.cfg.Server.PublicRead && len(corsConfig.AllowedOrigins) == 0 {
+		corsConfig.AllowedOrigins = []string{"*"}
 	}
 	if corsConfig.MaxAge == 0 && len(corsConfig.AllowedOrigins) > 0 {
 		corsConfig.MaxAge = 86400
@@ -153,41 +179,84 @@ func (s *Server) setupRouter() chi.Router {
 	r.Get("/health", s.handleHealth)
 	r.Head("/health", s.handleHealth)
 
-	// API routes (auth required)
+	// HTML views (chrome-less, designed to iframe-embed). Same auth posture
+	// as /api/v1 read endpoints: free under public_read, otherwise gated by
+	// the API key.
+	r.Group(func(r chi.Router) {
+		r.Use(s.publicReadOrAuth)
+		r.Get("/m/{id}", s.handleMessageView)
+		r.Get("/t/{id}", s.handleThreadView)
+		r.Get("/attachment/{id}", s.handleAttachmentView)
+		r.Get("/l/{name}", s.handleLabelView)
+		r.Get("/p/{id}", s.handleParticipantView)
+	})
+
+	// API routes. The /api/v1 mount splits into two groups:
+	//
+	//   * Read group — GET/HEAD endpoints that are safe to expose without
+	//     an API key when [server].public_read is true. Used by file://
+	//     review-app artifacts (e.g. radical-roc) that can't carry a
+	//     credential without leaking it.
+	//   * Write group — POSTs and anything privileged. Always requires the
+	//     API key when one is configured.
 	r.Route("/api/v1", func(r chi.Router) {
-		// Apply API key authentication
-		r.Use(s.authMiddleware)
+		r.Group(func(r chi.Router) {
+			r.Use(s.publicReadOrAuth)
 
-		// Stats
-		r.Get("/stats", s.handleStats)
+			r.Get("/stats", s.handleStats)
+			r.Get("/messages", s.handleListMessages)
+			r.Get("/messages/{id}", s.handleGetMessage)
+			r.Get("/messages/{id}/body", s.handleMessageBody)
+			r.Get("/messages/{id}/inline", s.handleMessageInline)
+			r.Get("/messages/by-rfc822-id/{rfc822_id}", s.handleGetMessageByRFC822ID)
+			r.Get("/threads/{id}", s.handleGetThread)
+			r.Get("/attachments/{id}", s.handleGetAttachment)
+			r.Get("/attachments/{id}/content", s.handleAttachmentContent)
+			r.Get("/labels", s.handleListLabels)
+			r.Get("/labels/{name}/messages", s.handleListMessagesByLabel)
+			r.Get("/participants/{id}", s.handleGetParticipant)
+			r.Get("/participants/{id}/messages", s.handleListMessagesByParticipant)
+			r.Get("/corpus/fingerprint", s.handleCorpusFingerprint)
+			r.Get("/search", s.handleSearch)
+			r.Get("/aggregates", s.handleAggregates)
+			r.Get("/aggregates/sub", s.handleSubAggregates)
+			r.Get("/messages/filter", s.handleFilteredMessages)
+			r.Get("/stats/total", s.handleTotalStats)
+			r.Get("/search/fast", s.handleFastSearch)
+			r.Get("/search/deep", s.handleDeepSearch)
+			r.Get("/accounts", s.handleListAccounts)
+			r.Get("/scheduler/status", s.handleSchedulerStatus)
+		})
 
-		// Messages
-		r.Get("/messages", s.handleListMessages)
-		r.Get("/messages/{id}", s.handleGetMessage)
-		r.Get("/messages/{id}/inline", s.handleMessageInline)
+		r.Group(func(r chi.Router) {
+			r.Use(s.authMiddleware)
 
-		// Search
-		r.Get("/search", s.handleSearch)
+			r.Post("/query", s.handleQuery)
+			r.Post("/accounts", s.handleAddAccount)
+			r.Post("/sync/{account}", s.handleTriggerSync)
+			r.Post("/auth/token/{email}", s.handleUploadToken)
+		})
+	})
 
-		// TUI aggregate endpoints (require query engine)
-		r.Post("/query", s.handleQuery)
-		r.Get("/aggregates", s.handleAggregates)
-		r.Get("/aggregates/sub", s.handleSubAggregates)
-		r.Get("/messages/filter", s.handleFilteredMessages)
-		r.Get("/stats/total", s.handleTotalStats)
-		r.Get("/search/fast", s.handleFastSearch)
-		r.Get("/search/deep", s.handleDeepSearch)
+	// /api/v2 — cleaner message-detail shape. Same posture as the
+	// /api/v1 read group (public_read auth-skip, loopback bypass).
+	// Body endpoint reuses the v1 handler because its return is raw
+	// bytes with the right Content-Type — no JSON shape to break.
+	r.Route("/api/v2", func(r chi.Router) {
+		r.Use(v2APIVersionHeader)
+		r.Use(s.publicReadOrAuth)
 
-		// Accounts and sync
-		r.Get("/accounts", s.handleListAccounts)
-		r.Post("/accounts", s.handleAddAccount)
-		r.Post("/sync/{account}", s.handleTriggerSync)
-
-		// Scheduler status
-		r.Get("/scheduler/status", s.handleSchedulerStatus)
-
-		// Token upload for headless OAuth
-		r.Post("/auth/token/{email}", s.handleUploadToken)
+		r.Get("/messages", s.handleListMessagesV2)
+		r.Get("/messages/{id}", s.handleGetMessageV2)
+		r.Get("/messages/{id}/body", s.handleMessageBody)
+		r.Get("/messages/by-rfc822-id/{rfc822_id}", s.handleGetMessageByRFC822IDV2)
+		r.Get("/threads/{id}", s.handleGetThreadV2)
+		r.Get("/labels/{name}/messages", s.handleListMessagesByLabelV2)
+		r.Get("/participants/{id}", s.handleGetParticipantV2)
+		r.Get("/participants/{id}/messages", s.handleListMessagesByParticipantV2)
+		r.Get("/attachments/{id}", s.handleGetAttachmentV2)
+		r.Get("/attachments/{id}/content", s.handleAttachmentContent)
+		r.Get("/search", s.handleSearchV2)
 	})
 
 	return r
@@ -264,6 +333,20 @@ func (s *Server) loggerMiddleware(next http.Handler) http.Handler {
 		}()
 
 		next.ServeHTTP(ww, r)
+	})
+}
+
+// publicReadOrAuth permits unauthenticated GET/HEAD when
+// [server].public_read is true; otherwise it falls through to the standard
+// API-key check. Used on the read endpoints under /api/v1 so review apps
+// served from file:// can fetch citations without embedding a key.
+func (s *Server) publicReadOrAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.Server.PublicRead && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		s.authMiddleware(next).ServeHTTP(w, r)
 	})
 }
 

@@ -102,4 +102,5 @@ func runCreateSubset(cmd *cobra.Command, _ []string) error {
 // with the given root command. The agent and full-surface binaries
 // call this to opt this command in.
 func RegisterCreateSubset(root *cobra.Command) {
-	root.AddCommand(createSubsetCmd)}
+	root.AddCommand(createSubsetCmd)
+}
