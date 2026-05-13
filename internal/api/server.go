@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
+	apiv2 "github.com/wesm/msgvault/internal/api/v2"
 	"github.com/wesm/msgvault/internal/config"
 	"github.com/wesm/msgvault/internal/query"
 	"github.com/wesm/msgvault/internal/scheduler"
@@ -238,25 +239,24 @@ func (s *Server) setupRouter() chi.Router {
 		})
 	})
 
-	// /api/v2 — cleaner message-detail shape. Same posture as the
-	// /api/v1 read group (public_read auth-skip, loopback bypass).
-	// Body endpoint reuses the v1 handler because its return is raw
-	// bytes with the right Content-Type — no JSON shape to break.
+	// /api/v2 — cleaner message-detail shape, delegated to the
+	// internal/api/v2 package. Same posture as the /api/v1 read group
+	// (public_read auth-skip, loopback bypass).
+	//
+	// Two routes are mounted here rather than inside v2.Register
+	// because they're shared with v1: `/messages/{id}/body` and
+	// `/attachments/{id}/content` return raw bytes with the right
+	// Content-Type — there is no JSON shape to break — and dragging
+	// them through the v2 package would force v2 to import v1 (which
+	// would create a cyclic import, since v1 imports v2 here).
 	r.Route("/api/v2", func(r chi.Router) {
-		r.Use(v2APIVersionHeader)
+		r.Use(apiv2.APIVersionHeader)
 		r.Use(s.publicReadOrAuth)
 
-		r.Get("/messages", s.handleListMessagesV2)
-		r.Get("/messages/{id}", s.handleGetMessageV2)
+		apiv2.NewHandler(s.store, s.logger).Register(r)
+
 		r.Get("/messages/{id}/body", s.handleMessageBody)
-		r.Get("/messages/by-rfc822-id/{rfc822_id}", s.handleGetMessageByRFC822IDV2)
-		r.Get("/threads/{id}", s.handleGetThreadV2)
-		r.Get("/labels/{name}/messages", s.handleListMessagesByLabelV2)
-		r.Get("/participants/{id}", s.handleGetParticipantV2)
-		r.Get("/participants/{id}/messages", s.handleListMessagesByParticipantV2)
-		r.Get("/attachments/{id}", s.handleGetAttachmentV2)
 		r.Get("/attachments/{id}/content", s.handleAttachmentContent)
-		r.Get("/search", s.handleSearchV2)
 	})
 
 	return r
