@@ -38,6 +38,62 @@ type APIAttachment struct {
 	Size     int64
 }
 
+// APIAddress is one structured email participant. Distinct from a
+// participant *row* (APIParticipant) — addresses appear inline on
+// every message; participants are the canonical identities.
+type APIAddress struct {
+	Name    string
+	Address string
+}
+
+// APIAttachmentV2 is the per-message attachment summary used by the v2
+// message endpoint. Carries the attachment id so consumers can deep
+// link to /attachment/{id} or /api/v1/attachments/{id}/content.
+type APIAttachmentV2 struct {
+	ID          int64
+	Filename    string
+	MimeType    string
+	SizeBytes   int64
+	ContentHash string
+}
+
+// APIMessageV2 is the v2 message-detail shape. Adds the headers and
+// IDs review apps actually care about (rfc822, in-reply-to,
+// references, structured participants, thread id, account, attachment
+// ids) that v1's APIMessage flattened away.
+//
+// Source mix: structured participants come from message_recipients +
+// participants; in_reply_to / references / reply_to come from
+// re-parsing the raw MIME blob via internal/mime; everything else is
+// already on the messages / sources / labels tables.
+type APIMessageV2 struct {
+	ID              int64
+	RFC822MessageID string
+	SourceMessageID string
+	ThreadID        int64
+	AccountEmail    string
+	MessageType     string
+	Subject         string
+	Snippet         string
+	From            *APIAddress
+	To              []APIAddress
+	Cc              []APIAddress
+	Bcc             []APIAddress
+	ReplyTo         []APIAddress
+	InReplyTo       string
+	References      []string
+	SentAt          time.Time
+	ReceivedAt      time.Time
+	Labels          []string
+	HasAttachments  bool
+	AttachmentCount int
+	SizeBytes       int64
+	DeletedAt       *time.Time
+	BodyText        string
+	BodyHTML        string
+	Attachments     []APIAttachmentV2
+}
+
 // APICorpusFingerprint is the cheap "did the corpus change" digest
 // returned by /api/v1/corpus/fingerprint.
 //

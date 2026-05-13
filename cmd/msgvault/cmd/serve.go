@@ -327,6 +327,14 @@ func (a *storeAPIAdapter) GetCorpusFingerprint() (*store.APICorpusFingerprint, e
 	return a.store.GetCorpusFingerprint()
 }
 
+func (a *storeAPIAdapter) GetMessageV2(id int64) (*store.APIMessageV2, error) {
+	return a.store.GetMessageV2(id)
+}
+
+func (a *storeAPIAdapter) GetMessageV2ByRFC822ID(rfc822ID string) (*store.APIMessageV2, error) {
+	return a.store.GetMessageV2ByRFC822ID(rfc822ID)
+}
+
 func (a *storeAPIAdapter) GetMessagesSummariesByIDs(ids []int64) ([]api.APIMessage, error) {
 	return a.store.GetMessagesSummariesByIDs(ids)
 }

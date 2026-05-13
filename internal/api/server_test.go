@@ -91,6 +91,9 @@ type mockStore struct {
 	// corpusFingerprint, when non-nil, is returned by GetCorpusFingerprint.
 	corpusFingerprint *store.APICorpusFingerprint
 
+	// messagesV2, keyed by message id, drives the /api/v2 endpoints.
+	messagesV2 map[int64]*store.APIMessageV2
+
 	// Call counts so tests can assert that bulk hydration paths use
 	// GetMessagesSummariesByIDs (one round-trip) instead of looping
 	// GetMessage (per-hit N+1).
@@ -159,6 +162,25 @@ func (m *mockStore) GetCorpusFingerprint() (*store.APICorpusFingerprint, error) 
 	}
 	cp := *m.corpusFingerprint
 	return &cp, nil
+}
+
+func (m *mockStore) GetMessageV2(id int64) (*store.APIMessageV2, error) {
+	if m.messagesV2 == nil {
+		return nil, nil
+	}
+	v, ok := m.messagesV2[id]
+	if !ok {
+		return nil, nil
+	}
+	return v, nil
+}
+
+func (m *mockStore) GetMessageV2ByRFC822ID(rfc822ID string) (*store.APIMessageV2, error) {
+	id, ok := m.rfc822Index[rfc822ID]
+	if !ok {
+		return nil, nil
+	}
+	return m.GetMessageV2(id)
 }
 
 // subsetMessages emulates LIMIT/OFFSET pagination against an in-memory

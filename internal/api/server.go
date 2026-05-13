@@ -36,6 +36,8 @@ type MessageStore interface {
 	GetParticipantByID(id int64) (*store.APIParticipant, error)
 	ListMessagesByParticipant(id int64, offset, limit int) ([]APIMessage, int64, error)
 	GetCorpusFingerprint() (*store.APICorpusFingerprint, error)
+	GetMessageV2(id int64) (*store.APIMessageV2, error)
+	GetMessageV2ByRFC822ID(rfc822ID string) (*store.APIMessageV2, error)
 	GetMessagesSummariesByIDs(ids []int64) ([]APIMessage, error)
 	SearchMessages(query string, offset, limit int) ([]APIMessage, int64, error)
 	SearchMessagesQuery(q *search.Query, offset, limit int) ([]APIMessage, int64, error)
@@ -230,6 +232,19 @@ func (s *Server) setupRouter() chi.Router {
 			r.Post("/sync/{account}", s.handleTriggerSync)
 			r.Post("/auth/token/{email}", s.handleUploadToken)
 		})
+	})
+
+	// /api/v2 — cleaner message-detail shape. Same posture as the
+	// /api/v1 read group (public_read auth-skip, loopback bypass).
+	// Body endpoint reuses the v1 handler because its return is raw
+	// bytes with the right Content-Type — no JSON shape to break.
+	r.Route("/api/v2", func(r chi.Router) {
+		r.Use(v2APIVersionHeader)
+		r.Use(s.publicReadOrAuth)
+
+		r.Get("/messages/{id}", s.handleGetMessageV2)
+		r.Get("/messages/{id}/body", s.handleMessageBody)
+		r.Get("/messages/by-rfc822-id/{rfc822_id}", s.handleGetMessageByRFC822IDV2)
 	})
 
 	return r

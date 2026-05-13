@@ -3139,6 +3139,163 @@ func TestHandleCorpusFingerprint(t *testing.T) {
 	}
 }
 
+func TestHandleGetMessageV2(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	deletedAt := mustParseTime(t, "2026-04-01T12:00:00Z")
+	ms.messagesV2 = map[int64]*store.APIMessageV2{
+		11134: {
+			ID:              11134,
+			RFC822MessageID: "<rfc-11134@example.com>",
+			SourceMessageID: "src-11134",
+			ThreadID:        2754,
+			AccountEmail:    "user@example.com",
+			MessageType:     "email",
+			Subject:         "Re: hello",
+			Snippet:         "first line",
+			From:            &store.APIAddress{Name: "Alice", Address: "alice@example.com"},
+			To:              []store.APIAddress{{Name: "Bob", Address: "bob@example.com"}},
+			Cc:              []store.APIAddress{{Address: "cc@example.com"}},
+			ReplyTo:         []store.APIAddress{{Address: "no-reply@example.com"}},
+			InReplyTo:       "<rfc-parent@example.com>",
+			References:      []string{"<rfc-root@example.com>", "<rfc-parent@example.com>"},
+			SentAt:          mustParseTime(t, "2026-05-12T10:00:00Z"),
+			ReceivedAt:      mustParseTime(t, "2026-05-12T10:00:05Z"),
+			Labels:          []string{"INBOX"},
+			HasAttachments:  true,
+			AttachmentCount: 1,
+			SizeBytes:       4096,
+			DeletedAt:       &deletedAt,
+			BodyText:        "plain body",
+			BodyHTML:        "<p>html body</p>",
+			Attachments: []store.APIAttachmentV2{
+				{ID: 7, Filename: "report.pdf", MimeType: "application/pdf", SizeBytes: 4096, ContentHash: "abcd"},
+			},
+		},
+	}
+
+	t.Run("structured shape matches v2 contract", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v2/messages/11134", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		if got := w.Header().Get("X-MsgVault-API"); got != "v2" {
+			t.Errorf("X-MsgVault-API = %q, want v2", got)
+		}
+
+		var resp MessageDetailV2
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+
+		if resp.ID != 11134 || resp.ThreadID != 2754 || resp.RFC822MessageID != "<rfc-11134@example.com>" {
+			t.Errorf("ids wrong: %+v", resp)
+		}
+		if resp.Account != "user@example.com" || resp.MessageType != "email" {
+			t.Errorf("account/type wrong: %+v", resp)
+		}
+		if resp.From == nil || resp.From.Address != "alice@example.com" || resp.From.Name != "Alice" {
+			t.Errorf("from wrong: %+v", resp.From)
+		}
+		if len(resp.To) != 1 || resp.To[0].Address != "bob@example.com" {
+			t.Errorf("to wrong: %+v", resp.To)
+		}
+		if resp.InReplyTo != "<rfc-parent@example.com>" || len(resp.References) != 2 {
+			t.Errorf("threading headers wrong: in_reply_to=%q references=%v",
+				resp.InReplyTo, resp.References)
+		}
+		if !resp.IsDeleted || resp.DeletedAt != "2026-04-01T12:00:00Z" {
+			t.Errorf("delete state wrong: is_deleted=%v deleted_at=%q", resp.IsDeleted, resp.DeletedAt)
+		}
+		if resp.Body.Text != "plain body" || resp.Body.HTML != "<p>html body</p>" {
+			t.Errorf("nested body wrong: %+v", resp.Body)
+		}
+		if len(resp.Attachments) != 1 || resp.Attachments[0].ID != 7 {
+			t.Errorf("attachments wrong: %+v", resp.Attachments)
+		}
+	})
+
+	t.Run("empty collections render as [] not null", func(t *testing.T) {
+		ms.messagesV2[1] = &store.APIMessageV2{ID: 1, Subject: "no recipients"}
+
+		req := httptest.NewRequest("GET", "/api/v2/messages/1", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+
+		body := w.Body.String()
+		// The canonical to/cc/bcc/labels/attachments fields must be
+		// "[]" not null — consumers iterate without nil checks.
+		for _, field := range []string{`"to":[]`, `"cc":[]`, `"bcc":[]`, `"labels":[]`, `"attachments":[]`} {
+			if !strings.Contains(body, field) {
+				t.Errorf("expected %s in response; got: %s", field, body)
+			}
+		}
+	})
+
+	t.Run("404 on miss", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v2/messages/9999", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", w.Code)
+		}
+	})
+}
+
+func TestHandleGetMessageByRFC822IDV2(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	ms.messagesV2 = map[int64]*store.APIMessageV2{
+		11134: {ID: 11134, RFC822MessageID: "<x@example.com>"},
+	}
+	ms.rfc822Index = map[string]int64{
+		"<017e01dce2ea$5bc034e0$13409ea0$@velawood.com>": 11134,
+	}
+
+	// Regression: $ in the segment must be percent-decoded — same bug
+	// as the v1 endpoint, since v2 uses the same chi.URLParam pattern.
+	req := httptest.NewRequest("GET",
+		"/api/v2/messages/by-rfc822-id/%3C017e01dce2ea%245bc034e0%2413409ea0%24%40velawood.com%3E", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp MessageDetailV2
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.ID != 11134 {
+		t.Errorf("id = %d, want 11134", resp.ID)
+	}
+}
+
+func TestV2RoutesStampV2VersionHeader(t *testing.T) {
+	// Sanity check: the global v1 header middleware must be overridden
+	// on /api/v2 routes by v2APIVersionHeader. A v2 endpoint that
+	// reports X-MsgVault-API: v1 is silently lying about its contract.
+	srv, ms := newTestServerWithMockStore(t)
+	ms.messagesV2 = map[int64]*store.APIMessageV2{1: {ID: 1}}
+
+	req := httptest.NewRequest("GET", "/api/v2/messages/1", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if got := w.Header().Get("X-MsgVault-API"); got != "v2" {
+		t.Errorf("X-MsgVault-API = %q, want v2", got)
+	}
+
+	// v1 endpoint should still report v1.
+	req2 := httptest.NewRequest("GET", "/api/v1/messages/1", nil)
+	w2 := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w2, req2)
+	if got := w2.Header().Get("X-MsgVault-API"); got != "v1" {
+		t.Errorf("v1 path X-MsgVault-API = %q, want v1", got)
+	}
+}
+
 func TestHandleCorpusFingerprint_StableAcrossCalls(t *testing.T) {
 	// Real-store smoke check: two consecutive calls without any sync
 	// in between must return the same fingerprint. Uses the mock that

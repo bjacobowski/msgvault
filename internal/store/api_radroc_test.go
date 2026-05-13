@@ -375,6 +375,154 @@ func TestStore_Participants(t *testing.T) {
 	})
 }
 
+func TestStore_GetMessageV2(t *testing.T) {
+	f := storetest.New(t)
+
+	// Build a single message with structured recipients, body parts,
+	// an attachment, a label, AND a real raw MIME blob so the in-reply-to
+	// / references / reply-to extraction path is exercised end to end.
+	alice := f.EnsureParticipant("alice@example.com", "Alice", "example.com")
+	bob := f.EnsureParticipant("bob@example.com", "Bob", "example.com")
+	carl := f.EnsureParticipant("carl@example.com", "Carl", "example.com")
+
+	id, err := f.Store.UpsertMessage(&store.Message{
+		ConversationID:  f.ConvID,
+		SourceID:        f.Source.ID,
+		SourceMessageID: "src-v2",
+		MessageType:     "email",
+		SizeEstimate:    1024,
+		RFC822MessageID: sql.NullString{String: "<rfc-child@example.com>", Valid: true},
+		Subject:         sql.NullString{String: "Re: hello", Valid: true},
+		Snippet:         sql.NullString{String: "hi there", Valid: true},
+		SentAt:          sql.NullTime{Time: time.Date(2026, 5, 12, 10, 0, 0, 0, time.UTC), Valid: true},
+		HasAttachments:  true,
+		AttachmentCount: 1,
+	})
+	if err != nil {
+		t.Fatalf("upsert message: %v", err)
+	}
+
+	if err := f.Store.ReplaceMessageRecipients(id, "from", []int64{alice}, []string{"Alice"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Store.ReplaceMessageRecipients(id, "to", []int64{bob}, []string{"Bob"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Store.ReplaceMessageRecipients(id, "cc", []int64{carl}, []string{"Carl"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.Store.UpsertMessageBody(id,
+		sql.NullString{String: "plain body", Valid: true},
+		sql.NullString{String: "<p>html body</p>", Valid: true},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.Store.UpsertAttachment(id, "report.pdf", "application/pdf",
+		"ab/abcd1234", "abcd1234", 4096); err != nil {
+		t.Fatal(err)
+	}
+
+	labels := f.EnsureLabels(map[string]string{"Label_INBOX": "INBOX"}, "system")
+	if err := f.Store.AddMessageLabels(id, []int64{labels["Label_INBOX"]}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Real RFC822 with headers the v2 detail must extract.
+	raw := []byte(strings.Join([]string{
+		"From: Alice <alice@example.com>",
+		"To: Bob <bob@example.com>",
+		"Cc: Carl <carl@example.com>",
+		"Reply-To: no-reply@example.com",
+		"Subject: Re: hello",
+		"Message-ID: <rfc-child@example.com>",
+		"In-Reply-To: <rfc-parent@example.com>",
+		"References: <rfc-root@example.com> <rfc-parent@example.com>",
+		"Date: Tue, 12 May 2026 10:00:00 +0000",
+		"Content-Type: text/plain; charset=utf-8",
+		"",
+		"hi there",
+	}, "\r\n"))
+	if err := f.Store.UpsertMessageRaw(id, raw); err != nil {
+		t.Fatalf("upsert raw: %v", err)
+	}
+
+	got, err := f.Store.GetMessageV2(id)
+	if err != nil {
+		t.Fatalf("GetMessageV2: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected hit, got nil")
+	}
+
+	if got.RFC822MessageID != "<rfc-child@example.com>" ||
+		got.SourceMessageID != "src-v2" ||
+		got.ThreadID != f.ConvID ||
+		got.AccountEmail != "test@example.com" ||
+		got.MessageType != "email" {
+		t.Errorf("ids/headers wrong: %+v", got)
+	}
+	if got.From == nil || got.From.Address != "alice@example.com" || got.From.Name != "Alice" {
+		t.Errorf("structured From wrong: %+v", got.From)
+	}
+	if len(got.To) != 1 || got.To[0].Address != "bob@example.com" || got.To[0].Name != "Bob" {
+		t.Errorf("structured To wrong: %+v", got.To)
+	}
+	if len(got.Cc) != 1 || got.Cc[0].Address != "carl@example.com" {
+		t.Errorf("structured Cc wrong: %+v", got.Cc)
+	}
+	// In-Reply-To / References / Reply-To came from the raw MIME path.
+	// internal/mime returns InReplyTo bracketed and References stripped;
+	// the API layer (messageDetailV2From) re-brackets References before
+	// emitting JSON.
+	if got.InReplyTo != "<rfc-parent@example.com>" {
+		t.Errorf("InReplyTo = %q", got.InReplyTo)
+	}
+	if len(got.References) != 2 || got.References[0] != "rfc-root@example.com" {
+		t.Errorf("References wrong: %+v", got.References)
+	}
+	if len(got.ReplyTo) != 1 || got.ReplyTo[0].Address != "no-reply@example.com" {
+		t.Errorf("ReplyTo wrong: %+v", got.ReplyTo)
+	}
+	if got.BodyText != "plain body" || got.BodyHTML != "<p>html body</p>" {
+		t.Errorf("body wrong: text=%q html=%q", got.BodyText, got.BodyHTML)
+	}
+	if len(got.Attachments) != 1 || got.Attachments[0].ID == 0 ||
+		got.Attachments[0].Filename != "report.pdf" {
+		t.Errorf("attachments wrong: %+v", got.Attachments)
+	}
+	if len(got.Labels) != 1 || got.Labels[0] != "INBOX" {
+		t.Errorf("labels wrong: %+v", got.Labels)
+	}
+	if got.AttachmentCount != 1 || !got.HasAttachments {
+		t.Errorf("attachment-count flags wrong: has=%v count=%d", got.HasAttachments, got.AttachmentCount)
+	}
+}
+
+func TestStore_GetMessageV2_NoRawBlob(t *testing.T) {
+	// When no raw MIME has been stored (older imports), in_reply_to /
+	// references / reply_to should be empty rather than fail the
+	// lookup. The rest of the v2 detail must still come back.
+	f := storetest.New(t)
+	id := f.NewMessage().WithSubject("plain").Create(t, f.Store)
+
+	got, err := f.Store.GetMessageV2(id)
+	if err != nil {
+		t.Fatalf("GetMessageV2: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected non-nil v2 detail even without raw blob")
+	}
+	if got.InReplyTo != "" || len(got.References) != 0 || len(got.ReplyTo) != 0 {
+		t.Errorf("expected empty MIME-derived headers; got in_reply_to=%q refs=%v replyto=%v",
+			got.InReplyTo, got.References, got.ReplyTo)
+	}
+	if got.Subject != "plain" {
+		t.Errorf("subject = %q, want %q", got.Subject, "plain")
+	}
+}
+
 func TestStore_GetCorpusFingerprint(t *testing.T) {
 	f := storetest.New(t)
 

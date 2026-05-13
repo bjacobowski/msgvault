@@ -45,9 +45,36 @@ allow-list (or `*`).
 
 ### API version header
 
-Every response carries `X-MsgVault-API: v1`. Treat it as the contract
-version. Breaking changes will increment to `v2` and live under a new
-`/api/v2/` mount; `v1` artifacts in the wild stay readable.
+Every response carries `X-MsgVault-API: v1` or `X-MsgVault-API: v2`
+depending on which mount served it. Treat it as the contract version.
+Both mounts coexist; `v1` artifacts in the wild stay readable forever.
+
+### v1 vs v2 — which to use
+
+| | v1 | v2 |
+|---|---|---|
+| Mount | `/api/v1/` | `/api/v2/` |
+| `from` | `"Name <email>"` string | `{name, address}` object |
+| `to`, `cc`, `bcc` | `["email", ...]` string array | `[{name, address}, ...]` |
+| Thread reference | `conversation_id` | `thread_id` |
+| `rfc822_message_id` field | absent (use `/by-rfc822-id` to query) | present, bracketed |
+| `in_reply_to`, `references` | absent | present (from MIME parse) |
+| `reply_to` | absent | present |
+| `source_message_id`, `account` | absent | present |
+| `message_type` | absent | present |
+| `attachment_count` | absent (`has_attachments` bool only) | present |
+| `is_deleted` flag | derived from `deleted_at` | explicit bool |
+| Attachment IDs inline | absent | present (`attachments[].id`) |
+| Body shape | `body` (str) + `body_html` (str) siblings | nested `body: {text, html}` |
+
+Use **v2** for new work — it carries the full standard-metadata set
+review apps actually need. v1 stays available indefinitely for
+existing consumers.
+
+Only the message-detail endpoints have v2 variants so far. Listing,
+thread, attachment, label, participant, search, and fingerprint
+endpoints all use the v1 shape; if a v2 shape becomes useful for
+those, they'll be added under `/api/v2/` without changing v1.
 
 ## Read endpoints
 
@@ -56,10 +83,10 @@ version. Breaking changes will increment to `v2` and live under a new
 | GET | `/health` | Presence check; always public. |
 | GET | `/api/v1/stats` | Corpus stats (totals + DB size). |
 | GET | `/api/v1/messages` | Paginated message list. |
-| GET | `/api/v1/messages/{id}` | Single message detail (JSON). |
+| GET | `/api/v1/messages/{id}` | Single message detail (v1 shape). |
 | GET | `/api/v1/messages/{id}/body?format=html\|text` | Raw body bytes with the right `Content-Type`. |
 | GET | `/api/v1/messages/{id}/inline` | CID-referenced inline MIME part. |
-| GET | `/api/v1/messages/by-rfc822-id/{rfc822_id}` | Lookup by `Message-ID:` header. |
+| GET | `/api/v1/messages/by-rfc822-id/{rfc822_id}` | Lookup by `Message-ID:` header (v1 shape). |
 | GET | `/api/v1/threads/{id}` | Thread JSON with participants + message summaries. |
 | GET | `/api/v1/attachments/{id}` | Attachment metadata. |
 | GET | `/api/v1/attachments/{id}/content` | Raw attachment bytes (range/conditional). |
@@ -69,6 +96,9 @@ version. Breaking changes will increment to `v2` and live under a new
 | GET | `/api/v1/participants/{id}/messages` | Messages involving a participant. |
 | GET | `/api/v1/search?q=…` | FTS5/vector/hybrid search. |
 | GET | `/api/v1/corpus/fingerprint` | Drift digest for the whole corpus. |
+| GET | `/api/v2/messages/{id}` | Message detail (v2 shape — structured headers). |
+| GET | `/api/v2/messages/{id}/body?format=html\|text` | Same body bytes as v1 — kept under v2 for path consistency. |
+| GET | `/api/v2/messages/by-rfc822-id/{rfc822_id}` | Lookup by Message-ID (v2 shape). |
 
 ### HTML companions
 
@@ -96,14 +126,64 @@ text rendered into an `html` request is wrapped in `<pre>` with minimal
 HTML escaping; raw HTML served as `text` is returned verbatim with
 `Content-Type: text/plain; charset=utf-8`.
 
-### `GET /api/v1/messages/by-rfc822-id/{rfc822_id}`
+### `GET /api/v1/messages/by-rfc822-id/{rfc822_id}` and `GET /api/v2/messages/by-rfc822-id/{rfc822_id}`
 
-`{rfc822_id}` should be URL-encoded — chi decodes the path segment.
-Returns the same `MessageDetail` shape as `/messages/{id}`. When the
-same `Message-ID:` appears in multiple synced accounts (e.g. the user
-received the same message at two addresses) the lowest internal id
-wins. No dedicated index — intended for low-volume citation traffic,
-not ingest.
+`{rfc822_id}` must be percent-encoded by the caller — chi.URLParam
+returns the raw encoded segment, and the handler `url.PathUnescape`s
+it before the DB lookup. Real Outlook-style Message-IDs contain `$`
+separators so this matters in practice.
+
+Returns the same `MessageDetail` shape as the corresponding
+`/messages/{id}` mount. When the same `Message-ID:` appears in
+multiple synced accounts (e.g. the user received the same message at
+two addresses) the lowest internal id wins. No dedicated index —
+intended for low-volume citation traffic, not ingest.
+
+### v2 message-detail JSON shape
+
+```jsonc
+{
+  "id": 11134,
+  "rfc822_message_id": "<...>",       // always bracketed, even if
+                                       // the underlying MIME parser stripped them
+  "source_message_id": "...",          // Gmail message id for round-trip
+  "thread_id": 2754,
+  "account": "user@gmail.com",         // which synced account this came from
+  "message_type": "email",
+  "subject": "...",
+  "snippet": "...",
+  "from":    { "name": "...", "address": "..." },
+  "to":      [ { "name": "...", "address": "..." }, ... ],
+  "cc":      [ ... ],
+  "bcc":     [ ... ],
+  "reply_to":[ ... ],                   // omitted when absent
+  "in_reply_to": "<...>",              // omitted when absent
+  "references": [ "<...>", ... ],      // omitted when empty
+  "sent_at": "RFC3339",
+  "received_at": "RFC3339",            // omitted when absent
+  "labels": [ ... ],
+  "has_attachments": true,
+  "attachment_count": 1,
+  "size_bytes": 12345,
+  "is_deleted": false,
+  "deleted_at": "RFC3339",             // present only when is_deleted = true
+  "body": { "text": "...", "html": "..." },
+  "attachments": [
+    { "id": 7, "filename": "...", "mime": "...", "size_bytes": 4096, "content_hash": "..." }
+  ]
+}
+```
+
+`to`, `cc`, `bcc`, `labels`, and `attachments` are always emitted as
+arrays (possibly empty) so consumers can iterate without nil checks.
+`reply_to`, `in_reply_to`, `references`, `deleted_at`, `received_at`,
+and the `from` object are omitted when empty.
+
+`in_reply_to` / `references` / `reply_to` are extracted by re-parsing
+the stored raw MIME blob on each request. The cost is one extra
+zlib-decompress + MIME parse per detail call; fine for citation-lookup
+traffic, would warrant denormalizing if hot. Messages imported before
+raw MIME was persisted leave these fields empty rather than failing.
 
 ### `GET /api/v1/attachments/{id}/content`
 
