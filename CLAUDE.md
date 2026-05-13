@@ -123,6 +123,9 @@ make lint                     # Run linter
 
 # Daemon mode (NAS/server deployment)
 ./msgvault-omgnos serve                                      # Start HTTP API + scheduled syncs
+# With [server].public_read = true (see docs/PUBLIC_API.md):
+#   GET /api/v1 read endpoints + /m/{id}, /t/{id}, /p/{id}, /l/{name},
+#   /attachment/{id} are auth-free; writes still require api_key.
 
 # Maintenance
 ./msgvault-omgnos repair-encoding                            # Fix UTF-8 encoding issues
