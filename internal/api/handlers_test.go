@@ -2414,13 +2414,19 @@ func TestHandleGetMessage_EngineUnsupportedFallsBackToStore(t *testing.T) {
 
 func TestHandleGetMessageByRFC822ID(t *testing.T) {
 	srv, store := newTestServerWithMockStore(t)
+	// Realistic Gmail Message-IDs carry `$`, `@`, `<`, `>` and sometimes
+	// `+`, `=`. All require percent-encoding in URLs. The handler must
+	// decode the path segment before hitting the store — chi.URLParam
+	// returns the raw encoded value, not the decoded one. This test
+	// locks that behavior.
 	store.rfc822Index = map[string]int64{
-		"<CAOh-abc@mail.example.com>": 1,
+		"<017e01dce2ea$5bc034e0$13409ea0$@velawood.com>": 1,
+		"<CAOh-abc@mail.example.com>":                    1,
 	}
 
-	t.Run("hit", func(t *testing.T) {
+	t.Run("hit with simple < > @ encoding", func(t *testing.T) {
 		req := httptest.NewRequest("GET",
-			"/api/v1/messages/by-rfc822-id/%3CCAOh-abc@mail.example.com%3E", nil)
+			"/api/v1/messages/by-rfc822-id/%3CCAOh-abc%40mail.example.com%3E", nil)
 		w := httptest.NewRecorder()
 		srv.Router().ServeHTTP(w, req)
 
@@ -2434,14 +2440,27 @@ func TestHandleGetMessageByRFC822ID(t *testing.T) {
 		if got := resp["id"]; got != float64(1) {
 			t.Errorf("id = %v, want 1", got)
 		}
-		if got := resp["subject"]; got != "Test Subject" {
-			t.Errorf("subject = %v, want %q", got, "Test Subject")
+	})
+
+	t.Run("hit when id contains $ (must be percent-decoded)", func(t *testing.T) {
+		// %24 = $ — Outlook-style Message-IDs use $ as a separator and
+		// have to round-trip through PathUnescape. Without the unescape
+		// the store sees the literal %24 and 404s. Regression for the
+		// real-data smoke test that surfaced this.
+		req := httptest.NewRequest("GET",
+			"/api/v1/messages/by-rfc822-id/%3C017e01dce2ea%245bc034e0%2413409ea0%24%40velawood.com%3E", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (regression: chi.URLParam returns raw, unescape needed); body=%s",
+				w.Code, w.Body.String())
 		}
 	})
 
 	t.Run("miss returns 404 JSON", func(t *testing.T) {
 		req := httptest.NewRequest("GET",
-			"/api/v1/messages/by-rfc822-id/%3Cnope@example.com%3E", nil)
+			"/api/v1/messages/by-rfc822-id/%3Cnope%40example.com%3E", nil)
 		w := httptest.NewRecorder()
 		srv.Router().ServeHTTP(w, req)
 

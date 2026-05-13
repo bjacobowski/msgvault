@@ -10,6 +10,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -401,14 +402,27 @@ func (s *Server) handleGetMessage(w http.ResponseWriter, r *http.Request) {
 
 // handleGetMessageByRFC822ID looks up a message by its RFC822 Message-ID
 // header. URL path: /api/v1/messages/by-rfc822-id/{rfc822_id} where
-// {rfc822_id} is URL-encoded — the chi router decodes path segments for us.
-// Returns the same MessageDetail shape as /messages/{id}, or 404 with a
-// consistent JSON error body when no message matches.
+// {rfc822_id} must be percent-encoded by the caller.
+//
+// chi.URLParam returns the *encoded* path segment — Go's net/http
+// decodes r.URL.Path, but chi v5 routes against r.URL.RawPath and the
+// URLParam value is the raw matched bytes. Real Gmail Message-IDs
+// commonly contain `$`, `@`, `<`, `>`, `+`, `=` which all require
+// percent-encoding; without an explicit unescape here the store
+// lookup tries to match the literal `%3C...%3E` value and 404s.
+//
+// Returns the same MessageDetail shape as /messages/{id}, or 404 with
+// a consistent JSON error body when no message matches.
 //
 // The query engine doesn't have a by-rfc822 entry point; this handler
 // resolves through the store only.
 func (s *Server) handleGetMessageByRFC822ID(w http.ResponseWriter, r *http.Request) {
-	rfcID := chi.URLParam(r, "rfc822_id")
+	raw := chi.URLParam(r, "rfc822_id")
+	rfcID, err := url.PathUnescape(raw)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_rfc822_id", "RFC822 Message-ID is malformed")
+		return
+	}
 	if rfcID == "" {
 		writeError(w, http.StatusBadRequest, "invalid_rfc822_id", "RFC822 Message-ID is required")
 		return
