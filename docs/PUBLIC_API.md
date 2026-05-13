@@ -71,10 +71,52 @@ Use **v2** for new work — it carries the full standard-metadata set
 review apps actually need. v1 stays available indefinitely for
 existing consumers.
 
-Only the message-detail endpoints have v2 variants so far. Listing,
-thread, attachment, label, participant, search, and fingerprint
-endpoints all use the v1 shape; if a v2 shape becomes useful for
-those, they'll be added under `/api/v2/` without changing v1.
+v2 currently covers message list/detail/by-rfc822/body, thread,
+label-filtered list, participant-filtered list, and search. The
+remaining v1 endpoints (`/stats`, `/labels`, `/attachments/{id}`,
+`/attachments/{id}/content`, `/participants/{id}`,
+`/corpus/fingerprint`, and the HTML companion views) don't suffer
+from the v1 shape problems and stay v1-only. They'll grow v2
+variants only if a consumer hits an actual need.
+
+### v2 list / search response shape
+
+```jsonc
+{
+  "total": 10337,
+  "offset": 0,
+  "limit": 50,
+  "messages": [
+    {
+      "id": 11134,
+      "rfc822_message_id": "<...>",
+      "source_message_id": "...",
+      "thread_id": 2754,
+      "account": "user@gmail.com",
+      "message_type": "email",
+      "subject": "...",
+      "snippet": "...",
+      "from": { "name": "...", "address": "..." },
+      "to":   [ {...}, ... ],
+      "cc":   [ {...}, ... ],
+      "sent_at": "RFC3339",
+      "received_at": "RFC3339",
+      "labels": [...],
+      "has_attachments": true,
+      "attachment_count": 1,
+      "size_bytes": 12345,
+      "is_deleted": false
+    },
+    ...
+  ]
+}
+```
+
+`bcc`, the body, the attachment list, and the MIME-derived headers
+(`in_reply_to`, `references`, `reply_to`) are detail-only — they
+require either an extra per-row table lookup or a raw-MIME parse, both
+of which are too expensive to pay per page. Hit
+`/api/v2/messages/{id}` for the full set.
 
 ## Read endpoints
 
@@ -96,9 +138,14 @@ those, they'll be added under `/api/v2/` without changing v1.
 | GET | `/api/v1/participants/{id}/messages` | Messages involving a participant. |
 | GET | `/api/v1/search?q=…` | FTS5/vector/hybrid search. |
 | GET | `/api/v1/corpus/fingerprint` | Drift digest for the whole corpus. |
+| GET | `/api/v2/messages` | Paginated message summaries (v2 shape, limit/offset). |
 | GET | `/api/v2/messages/{id}` | Message detail (v2 shape — structured headers). |
 | GET | `/api/v2/messages/{id}/body?format=html\|text` | Same body bytes as v1 — kept under v2 for path consistency. |
 | GET | `/api/v2/messages/by-rfc822-id/{rfc822_id}` | Lookup by Message-ID (v2 shape). |
+| GET | `/api/v2/threads/{id}` | Thread with v2 message-summary entries. |
+| GET | `/api/v2/labels/{name}/messages` | Label-filtered list (v2 shape). |
+| GET | `/api/v2/participants/{id}/messages` | Participant-filtered list (v2 shape). |
+| GET | `/api/v2/search?q=…` | FTS search returning v2 summaries (limit/offset). |
 
 ### HTML companions
 

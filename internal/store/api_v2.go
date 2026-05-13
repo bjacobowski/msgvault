@@ -159,6 +159,108 @@ func (s *Store) getMessageV2Where(where string, args ...any) (*APIMessageV2, err
 	return &v, nil
 }
 
+// BatchMessageMetaV2 returns the v2-only metadata fields
+// (rfc822_message_id, source_message_id, account email, message_type,
+// received_at, attachment_count) for a slice of message ids in a
+// single SQL round-trip. Pairs with BatchStructuredRecipients to let
+// v2 list endpoints hydrate everything in two extra queries.
+func (s *Store) BatchMessageMetaV2(ids []int64) (map[int64]*APIMessageMetaV2, error) {
+	out := make(map[int64]*APIMessageMetaV2)
+	if len(ids) == 0 {
+		return out, nil
+	}
+
+	err := queryInChunks(s.db, ids, nil,
+		`SELECT m.id,
+		        COALESCE(m.rfc822_message_id, ''),
+		        m.source_message_id,
+		        COALESCE(m.message_type, ''),
+		        COALESCE(m.received_at, ''),
+		        COALESCE(m.attachment_count, 0),
+		        COALESCE(src.identifier, '')
+		   FROM messages m
+		   LEFT JOIN sources src ON src.id = m.source_id
+		  WHERE m.id IN (%s)`,
+		func(rows *loggedRows) error {
+			var (
+				id        int64
+				meta      APIMessageMetaV2
+				recvAtStr sql.NullString
+			)
+			if err := rows.Scan(&id, &meta.RFC822MessageID, &meta.SourceMessageID,
+				&meta.MessageType, &recvAtStr, &meta.AttachmentCount, &meta.AccountEmail); err != nil {
+				return err
+			}
+			if recvAtStr.Valid && recvAtStr.String != "" {
+				meta.ReceivedAt = parseSQLiteTime(recvAtStr.String)
+			}
+			m := meta
+			out[id] = &m
+			return nil
+		})
+	if err != nil {
+		return nil, fmt.Errorf("batch message meta v2: %w", err)
+	}
+	return out, nil
+}
+
+// BatchStructuredRecipients returns the structured-address mapping
+// for a slice of message ids in a single SQL round-trip. Used by v2
+// list endpoints to hydrate many messages without N+1 queries.
+//
+// Missing ids are simply absent from the returned map — callers are
+// responsible for handling messages that have no recipient rows
+// (e.g. a row in `messages` with no `message_recipients`). Bcc is
+// included even though list responses don't surface it today, so
+// future consumers can opt in without a schema change.
+func (s *Store) BatchStructuredRecipients(ids []int64) (map[int64]*APIRecipientsV2, error) {
+	out := make(map[int64]*APIRecipientsV2)
+	if len(ids) == 0 {
+		return out, nil
+	}
+
+	err := queryInChunks(s.db, ids, nil,
+		`SELECT mr.message_id, mr.recipient_type,
+		        COALESCE(p.display_name, ''), COALESCE(p.email_address, '')
+		   FROM message_recipients mr
+		   JOIN participants p ON p.id = mr.participant_id
+		  WHERE mr.message_id IN (%s)
+		  ORDER BY mr.message_id, mr.id`,
+		func(rows *loggedRows) error {
+			var (
+				msgID int64
+				role  string
+				addr  APIAddress
+			)
+			if err := rows.Scan(&msgID, &role, &addr.Name, &addr.Address); err != nil {
+				return err
+			}
+			entry, ok := out[msgID]
+			if !ok {
+				entry = &APIRecipientsV2{}
+				out[msgID] = entry
+			}
+			switch role {
+			case "from":
+				if entry.From == nil {
+					a := addr
+					entry.From = &a
+				}
+			case "to":
+				entry.To = append(entry.To, addr)
+			case "cc":
+				entry.Cc = append(entry.Cc, addr)
+			case "bcc":
+				entry.Bcc = append(entry.Bcc, addr)
+			}
+			return nil
+		})
+	if err != nil {
+		return nil, fmt.Errorf("batch structured recipients: %w", err)
+	}
+	return out, nil
+}
+
 // getStructuredRecipients reads message_recipients + participants for
 // the given role and returns each address as a structured pair.
 func (s *Store) getStructuredRecipients(messageID int64, role string) ([]APIAddress, error) {

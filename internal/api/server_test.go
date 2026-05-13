@@ -94,6 +94,13 @@ type mockStore struct {
 	// messagesV2, keyed by message id, drives the /api/v2 endpoints.
 	messagesV2 map[int64]*store.APIMessageV2
 
+	// structuredRecipients drives BatchStructuredRecipients for v2 list
+	// endpoints. Keyed by message id.
+	structuredRecipients map[int64]*store.APIRecipientsV2
+
+	// messageMetaV2 drives BatchMessageMetaV2. Keyed by message id.
+	messageMetaV2 map[int64]*store.APIMessageMetaV2
+
 	// Call counts so tests can assert that bulk hydration paths use
 	// GetMessagesSummariesByIDs (one round-trip) instead of looping
 	// GetMessage (per-hit N+1).
@@ -181,6 +188,32 @@ func (m *mockStore) GetMessageV2ByRFC822ID(rfc822ID string) (*store.APIMessageV2
 		return nil, nil
 	}
 	return m.GetMessageV2(id)
+}
+
+func (m *mockStore) BatchStructuredRecipients(ids []int64) (map[int64]*store.APIRecipientsV2, error) {
+	out := make(map[int64]*store.APIRecipientsV2, len(ids))
+	if m.structuredRecipients == nil {
+		return out, nil
+	}
+	for _, id := range ids {
+		if rcp, ok := m.structuredRecipients[id]; ok {
+			out[id] = rcp
+		}
+	}
+	return out, nil
+}
+
+func (m *mockStore) BatchMessageMetaV2(ids []int64) (map[int64]*store.APIMessageMetaV2, error) {
+	out := make(map[int64]*store.APIMessageMetaV2, len(ids))
+	if m.messageMetaV2 == nil {
+		return out, nil
+	}
+	for _, id := range ids {
+		if meta, ok := m.messageMetaV2[id]; ok {
+			out[id] = meta
+		}
+	}
+	return out, nil
 }
 
 // subsetMessages emulates LIMIT/OFFSET pagination against an in-memory

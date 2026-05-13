@@ -46,6 +46,54 @@ type APIAddress struct {
 	Address string
 }
 
+// APIMessageMetaV2 holds the v2-specific fields that aren't already
+// on APIMessage but are cheap to batch-load alongside list results.
+// Populated by BatchMessageMetaV2 and merged in at the API layer so
+// v1 list methods stay untouched.
+type APIMessageMetaV2 struct {
+	RFC822MessageID string
+	SourceMessageID string
+	AccountEmail    string
+	MessageType     string
+	ReceivedAt      time.Time
+	AttachmentCount int
+}
+
+// APIMessageSummaryV2 is the list-mode shape: same identity and
+// metadata as APIMessageV2 but without the body, attachments, or MIME-
+// derived headers (in_reply_to, references). List endpoints avoid the
+// per-row body fetch + MIME parse that the detail endpoint pays.
+type APIMessageSummaryV2 struct {
+	ID              int64
+	RFC822MessageID string
+	SourceMessageID string
+	ThreadID        int64
+	AccountEmail    string
+	MessageType     string
+	Subject         string
+	Snippet         string
+	From            *APIAddress
+	To              []APIAddress
+	Cc              []APIAddress
+	SentAt          time.Time
+	ReceivedAt      time.Time
+	Labels          []string
+	HasAttachments  bool
+	AttachmentCount int
+	SizeBytes       int64
+	DeletedAt       *time.Time
+}
+
+// APIRecipientsV2 holds the structured participants for a single
+// message — produced by BatchStructuredRecipients so list endpoints
+// can hydrate many messages in one query.
+type APIRecipientsV2 struct {
+	From *APIAddress
+	To   []APIAddress
+	Cc   []APIAddress
+	Bcc  []APIAddress
+}
+
 // APIAttachmentV2 is the per-message attachment summary used by the v2
 // message endpoint. Carries the attachment id so consumers can deep
 // link to /attachment/{id} or /api/v1/attachments/{id}/content.

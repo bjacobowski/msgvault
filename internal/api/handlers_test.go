@@ -3272,6 +3272,197 @@ func TestHandleGetMessageByRFC822IDV2(t *testing.T) {
 	}
 }
 
+func TestHandleListMessagesV2(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	ms.structuredRecipients = map[int64]*store.APIRecipientsV2{
+		1: {
+			From: &store.APIAddress{Name: "Sender", Address: "sender@example.com"},
+			To:   []store.APIAddress{{Address: "recipient@example.com"}},
+		},
+	}
+	ms.messageMetaV2 = map[int64]*store.APIMessageMetaV2{
+		1: {
+			RFC822MessageID: "<rfc-1@example.com>",
+			SourceMessageID: "src-1",
+			AccountEmail:    "user@example.com",
+			MessageType:     "email",
+			AttachmentCount: 0,
+		},
+	}
+
+	req := httptest.NewRequest("GET", "/api/v2/messages?limit=5", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("X-MsgVault-API"); got != "v2" {
+		t.Errorf("X-MsgVault-API = %q, want v2", got)
+	}
+
+	var resp PaginatedMessagesResponseV2
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Total != 1 || resp.Limit != 5 || len(resp.Messages) != 1 {
+		t.Errorf("unexpected envelope: %+v", resp)
+	}
+	m := resp.Messages[0]
+	if m.From == nil || m.From.Address != "sender@example.com" {
+		t.Errorf("from not structured-enriched: %+v", m.From)
+	}
+	if len(m.To) != 1 || m.To[0].Address != "recipient@example.com" {
+		t.Errorf("to not structured-enriched: %+v", m.To)
+	}
+	if m.RFC822MessageID != "<rfc-1@example.com>" {
+		t.Errorf("rfc822 meta not enriched: %q", m.RFC822MessageID)
+	}
+	if m.Account != "user@example.com" {
+		t.Errorf("account meta not enriched: %q", m.Account)
+	}
+	if m.MessageType != "email" {
+		t.Errorf("message_type meta not enriched: %q", m.MessageType)
+	}
+}
+
+func TestHandleListMessagesV2_EmptyRecipientsRenderAsArrays(t *testing.T) {
+	srv, _ := newTestServerWithMockStore(t)
+	// No structuredRecipients map seeded → enrichment returns empty.
+	req := httptest.NewRequest("GET", "/api/v2/messages", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	body := w.Body.String()
+	for _, field := range []string{`"to":[]`, `"cc":[]`, `"labels":[`} {
+		if !strings.Contains(body, field) {
+			t.Errorf("expected %s in response; got: %s", field, body)
+		}
+	}
+}
+
+func TestHandleListMessagesByLabelV2(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	ms.labelMembership = map[string][]int64{"REKKIE": {1}}
+	ms.structuredRecipients = map[int64]*store.APIRecipientsV2{
+		1: {From: &store.APIAddress{Address: "from@example.com"}},
+	}
+
+	req := httptest.NewRequest("GET", "/api/v2/labels/REKKIE/messages", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var resp PaginatedMessagesResponseV2
+	_ = json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Total != 1 || len(resp.Messages) != 1 {
+		t.Errorf("envelope wrong: %+v", resp)
+	}
+	if resp.Messages[0].From == nil || resp.Messages[0].From.Address != "from@example.com" {
+		t.Errorf("from not enriched: %+v", resp.Messages[0])
+	}
+}
+
+func TestHandleListMessagesByParticipantV2(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	ms.participantMembership = map[int64][]int64{42: {1}}
+	ms.structuredRecipients = map[int64]*store.APIRecipientsV2{
+		1: {To: []store.APIAddress{{Address: "to@example.com"}}},
+	}
+
+	req := httptest.NewRequest("GET", "/api/v2/participants/42/messages", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var resp PaginatedMessagesResponseV2
+	_ = json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Total != 1 || resp.Messages[0].To[0].Address != "to@example.com" {
+		t.Errorf("envelope wrong: %+v", resp)
+	}
+}
+
+func TestHandleSearchV2(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	ms.structuredRecipients = map[int64]*store.APIRecipientsV2{
+		1: {From: &store.APIAddress{Address: "sender@example.com"}},
+	}
+
+	t.Run("missing q → 400", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v2/search", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", w.Code)
+		}
+	})
+
+	t.Run("hit returns v2 summaries", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v2/search?q=anything", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		var resp PaginatedMessagesResponseV2
+		_ = json.NewDecoder(w.Body).Decode(&resp)
+		if len(resp.Messages) == 0 || resp.Messages[0].From == nil {
+			t.Errorf("envelope wrong: %+v", resp)
+		}
+	})
+}
+
+func TestHandleGetThreadV2(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	ms.threads = map[int64]*store.APIThread{
+		4421: {
+			ID: 4421, Subject: "Re: hello", MessageCount: 1,
+			Participants: []store.APIThreadParticipant{
+				{ID: 10, Name: "Alice", Address: "alice@example.com"},
+			},
+			Messages: []store.APIThreadMessage{
+				{ID: 1, From: "alice@example.com", FromName: "Alice",
+					SentAt: mustParseTime(t, "2026-05-12T10:00:00Z"), Snippet: "Hi"},
+			},
+		},
+	}
+	ms.structuredRecipients = map[int64]*store.APIRecipientsV2{
+		1: {
+			From: &store.APIAddress{Name: "Alice", Address: "alice@example.com"},
+			To:   []store.APIAddress{{Name: "Bob", Address: "bob@example.com"}},
+		},
+	}
+
+	req := httptest.NewRequest("GET", "/api/v2/threads/4421", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("X-MsgVault-API"); got != "v2" {
+		t.Errorf("X-MsgVault-API = %q, want v2", got)
+	}
+
+	var resp ThreadResponseV2
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.ID != 4421 || resp.MessageCount != 1 || len(resp.Messages) != 1 {
+		t.Errorf("envelope wrong: %+v", resp)
+	}
+	m := resp.Messages[0]
+	if m.From == nil || m.From.Address != "alice@example.com" || m.From.Name != "Alice" {
+		t.Errorf("thread message from not enriched: %+v", m.From)
+	}
+	if len(m.To) != 1 || m.To[0].Address != "bob@example.com" {
+		t.Errorf("thread message to not enriched: %+v", m.To)
+	}
+}
+
 func TestV2RoutesStampV2VersionHeader(t *testing.T) {
 	// Sanity check: the global v1 header middleware must be overridden
 	// on /api/v2 routes by v2APIVersionHeader. A v2 endpoint that

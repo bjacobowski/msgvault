@@ -38,6 +38,8 @@ type MessageStore interface {
 	GetCorpusFingerprint() (*store.APICorpusFingerprint, error)
 	GetMessageV2(id int64) (*store.APIMessageV2, error)
 	GetMessageV2ByRFC822ID(rfc822ID string) (*store.APIMessageV2, error)
+	BatchStructuredRecipients(ids []int64) (map[int64]*store.APIRecipientsV2, error)
+	BatchMessageMetaV2(ids []int64) (map[int64]*store.APIMessageMetaV2, error)
 	GetMessagesSummariesByIDs(ids []int64) ([]APIMessage, error)
 	SearchMessages(query string, offset, limit int) ([]APIMessage, int64, error)
 	SearchMessagesQuery(q *search.Query, offset, limit int) ([]APIMessage, int64, error)
@@ -242,9 +244,14 @@ func (s *Server) setupRouter() chi.Router {
 		r.Use(v2APIVersionHeader)
 		r.Use(s.publicReadOrAuth)
 
+		r.Get("/messages", s.handleListMessagesV2)
 		r.Get("/messages/{id}", s.handleGetMessageV2)
 		r.Get("/messages/{id}/body", s.handleMessageBody)
 		r.Get("/messages/by-rfc822-id/{rfc822_id}", s.handleGetMessageByRFC822IDV2)
+		r.Get("/threads/{id}", s.handleGetThreadV2)
+		r.Get("/labels/{name}/messages", s.handleListMessagesByLabelV2)
+		r.Get("/participants/{id}/messages", s.handleListMessagesByParticipantV2)
+		r.Get("/search", s.handleSearchV2)
 	})
 
 	return r

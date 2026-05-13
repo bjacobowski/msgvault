@@ -239,6 +239,324 @@ func normalizeMessageID(s string) string {
 	return "<" + s + ">"
 }
 
+// MessageSummaryV2 is the list-mode v2 shape — same identity and
+// metadata as MessageDetailV2 minus body, attachments, and the MIME-
+// derived headers (in_reply_to, references) that would force a raw
+// MIME parse per row. Bcc is intentionally omitted; consumers
+// rendering lists rarely need it, and dropping it keeps responses
+// lean.
+type MessageSummaryV2 struct {
+	ID              int64             `json:"id"`
+	RFC822MessageID string            `json:"rfc822_message_id,omitempty"`
+	SourceMessageID string            `json:"source_message_id,omitempty"`
+	ThreadID        int64             `json:"thread_id,omitempty"`
+	Account         string            `json:"account,omitempty"`
+	MessageType     string            `json:"message_type,omitempty"`
+	Subject         string            `json:"subject"`
+	Snippet         string            `json:"snippet,omitempty"`
+	From            *EmailAddressDTO  `json:"from,omitempty"`
+	To              []EmailAddressDTO `json:"to"`
+	Cc              []EmailAddressDTO `json:"cc"`
+	SentAt          string            `json:"sent_at,omitempty"`
+	ReceivedAt      string            `json:"received_at,omitempty"`
+	Labels          []string          `json:"labels"`
+	HasAttachments  bool              `json:"has_attachments"`
+	AttachmentCount int               `json:"attachment_count"`
+	SizeBytes       int64             `json:"size_bytes,omitempty"`
+	IsDeleted       bool              `json:"is_deleted"`
+	DeletedAt       string            `json:"deleted_at,omitempty"`
+}
+
+// PaginatedMessagesResponseV2 wraps a paginated message-summary list.
+// limit/offset match the v1 label/participant convention; the response
+// always includes `total` so consumers can paginate without
+// deduplicated-count tricks.
+type PaginatedMessagesResponseV2 struct {
+	Total    int64              `json:"total"`
+	Offset   int                `json:"offset"`
+	Limit    int                `json:"limit"`
+	Messages []MessageSummaryV2 `json:"messages"`
+}
+
+// ThreadResponseV2 mirrors v1 ThreadResponse but embeds the cleaner
+// MessageSummaryV2 shape so consumers can iterate a thread without
+// dropping back to per-id detail calls just to get structured
+// recipients.
+type ThreadResponseV2 struct {
+	ID           int64                  `json:"id"`
+	Subject      string                 `json:"subject"`
+	MessageCount int64                  `json:"message_count"`
+	Participants []ThreadParticipantDTO `json:"participants"`
+	Messages     []MessageSummaryV2     `json:"messages"`
+}
+
+// handleListMessagesV2 paginates the corpus with the v2 summary shape.
+// limit/offset (default 50, clamped to maxPageSize).
+func (s *Server) handleListMessagesV2(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
+		return
+	}
+	limit, offset := parseLimitOffset(r)
+
+	msgs, total, err := s.store.ListMessages(offset, limit)
+	if err != nil {
+		s.logger.Error("list messages v2", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve messages")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.paginateV2(msgs, total, offset, limit))
+}
+
+// handleListMessagesByLabelV2 is the v2 take on
+// /api/v1/labels/{name}/messages.
+func (s *Server) handleListMessagesByLabelV2(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "invalid_name", "Label name is required")
+		return
+	}
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
+		return
+	}
+	limit, offset := parseLimitOffset(r)
+
+	msgs, total, err := s.store.ListMessagesByLabel(name, offset, limit)
+	if err != nil {
+		s.logger.Error("list by label v2", "name", name, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve messages")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.paginateV2(msgs, total, offset, limit))
+}
+
+// handleListMessagesByParticipantV2 is the v2 take on
+// /api/v1/participants/{id}/messages.
+func (s *Server) handleListMessagesByParticipantV2(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "Participant ID must be a number")
+		return
+	}
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
+		return
+	}
+	limit, offset := parseLimitOffset(r)
+
+	msgs, total, err := s.store.ListMessagesByParticipant(id, offset, limit)
+	if err != nil {
+		s.logger.Error("list by participant v2", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve messages")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.paginateV2(msgs, total, offset, limit))
+}
+
+// handleSearchV2 returns search hits as v2 summaries. Accepts the same
+// `q` and `mode` (fts|vector|hybrid) parameters as /api/v1/search but
+// always uses limit/offset for pagination consistency with the rest
+// of v2.
+func (s *Server) handleSearchV2(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
+		return
+	}
+	q := r.URL.Query().Get("q")
+	if q == "" {
+		writeError(w, http.StatusBadRequest, "missing_query", "Query parameter 'q' is required")
+		return
+	}
+	limit, offset := parseLimitOffset(r)
+
+	// FTS path only — vector/hybrid require the search.Query plumbing
+	// that the v1 handler builds. Keeping v2 to FTS for now means we
+	// don't take a dependency on the embedder; vector/hybrid stay on
+	// /api/v1/search until a v2 caller asks for them.
+	msgs, total, err := s.store.SearchMessages(q, offset, limit)
+	if err != nil {
+		s.logger.Error("search v2", "q", q, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Search failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.paginateV2(msgs, total, offset, limit))
+}
+
+// handleGetThreadV2 returns the same thread shape as v1 but with
+// MessageSummaryV2 entries — structured from/to/cc, thread_id,
+// account, rfc822_message_id, etc.
+func (s *Server) handleGetThreadV2(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "Thread ID must be a number")
+		return
+	}
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
+		return
+	}
+
+	th, err := s.store.GetThread(id)
+	if err != nil {
+		s.logger.Error("get thread v2", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve thread")
+		return
+	}
+	if th == nil {
+		writeError(w, http.StatusNotFound, "not_found", "Thread not found")
+		return
+	}
+
+	// Pull message IDs and hydrate via ListMessagesByConversation... wait,
+	// no such method exists. The store's APIThread.Messages already
+	// carries enough to build summaries by re-fetching: do a single
+	// GetMessagesSummariesByIDs to grab APIMessage rows, then enrich
+	// structured recipients.
+	ids := make([]int64, 0, len(th.Messages))
+	for _, m := range th.Messages {
+		ids = append(ids, m.ID)
+	}
+	msgs, err := s.store.GetMessagesSummariesByIDs(ids)
+	if err != nil {
+		s.logger.Error("thread v2 hydrate", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve thread messages")
+		return
+	}
+	summaries, err := s.summariesV2(msgs)
+	if err != nil {
+		s.logger.Error("thread v2 enrich", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to enrich thread")
+		return
+	}
+	// Preserve the chronological order GetThread returned: re-sort by
+	// the id-order of th.Messages.
+	indexOf := make(map[int64]int, len(th.Messages))
+	for i, m := range th.Messages {
+		indexOf[m.ID] = i
+	}
+	orderedSummaries := make([]MessageSummaryV2, len(summaries))
+	for _, s := range summaries {
+		if pos, ok := indexOf[s.ID]; ok {
+			orderedSummaries[pos] = s
+		}
+	}
+
+	resp := ThreadResponseV2{
+		ID:           th.ID,
+		Subject:      th.Subject,
+		MessageCount: th.MessageCount,
+		Participants: make([]ThreadParticipantDTO, 0, len(th.Participants)),
+		Messages:     orderedSummaries,
+	}
+	for _, p := range th.Participants {
+		resp.Participants = append(resp.Participants, ThreadParticipantDTO{
+			ID: p.ID, Name: p.Name, Address: p.Address,
+		})
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// paginateV2 is the shared shape-and-enrich step for list endpoints.
+// Hydrates structured recipients for the page, converts to JSON
+// summaries, wraps in the paginated envelope.
+func (s *Server) paginateV2(msgs []APIMessage, total int64, offset, limit int) PaginatedMessagesResponseV2 {
+	summaries, err := s.summariesV2(msgs)
+	if err != nil {
+		// Enrichment failure is non-fatal for list pages — emit
+		// fallback summaries built from the v1 strings so a transient
+		// participants-table glitch doesn't break the page. The
+		// per-row recipients will just be empty.
+		s.logger.Warn("paginateV2 enrich failed; falling back", "error", err)
+		summaries = make([]MessageSummaryV2, len(msgs))
+		for i, m := range msgs {
+			summaries[i] = messageSummaryV2FromAPIMessage(m, nil, nil)
+		}
+	}
+	return PaginatedMessagesResponseV2{
+		Total: total, Offset: offset, Limit: limit, Messages: summaries,
+	}
+}
+
+// summariesV2 enriches a list of v1 APIMessage rows with structured
+// recipients AND the v2-only meta fields (rfc822_message_id, account,
+// received_at, message_type, attachment_count, source_message_id) in
+// two batched queries, then converts each row to a
+// MessageSummaryV2. Recipients-batch failure is fatal; meta-batch
+// failure is fatal too (we'd rather a 500 than silently drop fields
+// the consumer is encoding citations against).
+func (s *Server) summariesV2(msgs []APIMessage) ([]MessageSummaryV2, error) {
+	if len(msgs) == 0 {
+		return []MessageSummaryV2{}, nil
+	}
+	ids := make([]int64, 0, len(msgs))
+	for _, m := range msgs {
+		ids = append(ids, m.ID)
+	}
+	rcps, err := s.store.BatchStructuredRecipients(ids)
+	if err != nil {
+		return nil, err
+	}
+	meta, err := s.store.BatchMessageMetaV2(ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]MessageSummaryV2, len(msgs))
+	for i, m := range msgs {
+		out[i] = messageSummaryV2FromAPIMessage(m, rcps[m.ID], meta[m.ID])
+	}
+	return out, nil
+}
+
+// messageSummaryV2FromAPIMessage converts a v1 APIMessage row plus
+// its (optional) structured recipients and (optional) v2 meta into a
+// v2 summary DTO. Either side-channel arg may be nil — fallback paths
+// (e.g. paginateV2 after a transient enrichment failure) pass nil and
+// get a partial-but-valid summary.
+func messageSummaryV2FromAPIMessage(m APIMessage, rcp *store.APIRecipientsV2, meta *store.APIMessageMetaV2) MessageSummaryV2 {
+	s := MessageSummaryV2{
+		ID:             m.ID,
+		ThreadID:       m.ConversationID,
+		Subject:        m.Subject,
+		Snippet:        m.Snippet,
+		Labels:         stringsOrEmpty(m.Labels),
+		HasAttachments: m.HasAttachments,
+		SizeBytes:      m.SizeEstimate,
+		IsDeleted:      m.DeletedAt != nil,
+	}
+	if !m.SentAt.IsZero() {
+		s.SentAt = m.SentAt.UTC().Format(time.RFC3339)
+	}
+	if m.DeletedAt != nil {
+		s.DeletedAt = m.DeletedAt.UTC().Format(time.RFC3339)
+	}
+
+	if rcp != nil {
+		if rcp.From != nil {
+			s.From = &EmailAddressDTO{Name: rcp.From.Name, Address: rcp.From.Address}
+		}
+		s.To = addressesV2(rcp.To)
+		s.Cc = addressesV2(rcp.Cc)
+	} else {
+		s.To = []EmailAddressDTO{}
+		s.Cc = []EmailAddressDTO{}
+	}
+
+	if meta != nil {
+		s.RFC822MessageID = normalizeMessageID(meta.RFC822MessageID)
+		s.SourceMessageID = meta.SourceMessageID
+		s.Account = meta.AccountEmail
+		s.MessageType = meta.MessageType
+		s.AttachmentCount = meta.AttachmentCount
+		if !meta.ReceivedAt.IsZero() {
+			s.ReceivedAt = meta.ReceivedAt.UTC().Format(time.RFC3339)
+		}
+	}
+	return s
+}
+
 // v2APIVersionHeader replaces the global v1 header for routes mounted
 // under /api/v2.
 func v2APIVersionHeader(next http.Handler) http.Handler {

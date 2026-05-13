@@ -335,6 +335,14 @@ func (a *storeAPIAdapter) GetMessageV2ByRFC822ID(rfc822ID string) (*store.APIMes
 	return a.store.GetMessageV2ByRFC822ID(rfc822ID)
 }
 
+func (a *storeAPIAdapter) BatchStructuredRecipients(ids []int64) (map[int64]*store.APIRecipientsV2, error) {
+	return a.store.BatchStructuredRecipients(ids)
+}
+
+func (a *storeAPIAdapter) BatchMessageMetaV2(ids []int64) (map[int64]*store.APIMessageMetaV2, error) {
+	return a.store.BatchMessageMetaV2(ids)
+}
+
 func (a *storeAPIAdapter) GetMessagesSummariesByIDs(ids []int64) ([]api.APIMessage, error) {
 	return a.store.GetMessagesSummariesByIDs(ids)
 }

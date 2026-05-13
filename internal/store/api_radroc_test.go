@@ -523,6 +523,123 @@ func TestStore_GetMessageV2_NoRawBlob(t *testing.T) {
 	}
 }
 
+func TestStore_BatchStructuredRecipients(t *testing.T) {
+	f := storetest.New(t)
+
+	alice := f.EnsureParticipant("alice@example.com", "Alice", "example.com")
+	bob := f.EnsureParticipant("bob@example.com", "Bob", "example.com")
+	carl := f.EnsureParticipant("carl@example.com", "Carl", "example.com")
+
+	id1 := f.NewMessage().Create(t, f.Store)
+	id2 := f.NewMessage().Create(t, f.Store)
+	id3 := f.NewMessage().Create(t, f.Store) // no recipients
+
+	if err := f.Store.ReplaceMessageRecipients(id1, "from", []int64{alice}, []string{"Alice"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Store.ReplaceMessageRecipients(id1, "to", []int64{bob, carl}, []string{"Bob", "Carl"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Store.ReplaceMessageRecipients(id2, "from", []int64{bob}, []string{"Bob"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Store.ReplaceMessageRecipients(id2, "cc", []int64{carl}, []string{"Carl"}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := f.Store.BatchStructuredRecipients([]int64{id1, id2, id3})
+	if err != nil {
+		t.Fatalf("BatchStructuredRecipients: %v", err)
+	}
+
+	// id1: from Alice; to Bob, Carl
+	r1 := out[id1]
+	if r1 == nil || r1.From == nil || r1.From.Address != "alice@example.com" {
+		t.Errorf("id1 from wrong: %+v", r1)
+	}
+	if r1 == nil || len(r1.To) != 2 {
+		t.Fatalf("id1 to count = %d, want 2", len(r1.To))
+	}
+	addrs := []string{r1.To[0].Address, r1.To[1].Address}
+	if !((addrs[0] == "bob@example.com" && addrs[1] == "carl@example.com") ||
+		(addrs[0] == "carl@example.com" && addrs[1] == "bob@example.com")) {
+		t.Errorf("id1 to addrs unexpected: %+v", r1.To)
+	}
+
+	// id2: from Bob; cc Carl
+	r2 := out[id2]
+	if r2 == nil || r2.From == nil || r2.From.Address != "bob@example.com" {
+		t.Errorf("id2 from wrong: %+v", r2)
+	}
+	if r2 == nil || len(r2.Cc) != 1 || r2.Cc[0].Address != "carl@example.com" {
+		t.Errorf("id2 cc wrong: %+v", r2.Cc)
+	}
+
+	// id3: no recipient rows ⇒ absent from the map.
+	if _, ok := out[id3]; ok {
+		t.Errorf("id3 should be absent from result (no rows), got %+v", out[id3])
+	}
+}
+
+func TestStore_BatchMessageMetaV2(t *testing.T) {
+	f := storetest.New(t)
+
+	recv := time.Date(2026, 5, 12, 10, 0, 5, 0, time.UTC)
+	id1, err := f.Store.UpsertMessage(&store.Message{
+		ConversationID:  f.ConvID,
+		SourceID:        f.Source.ID,
+		SourceMessageID: "src-meta-1",
+		MessageType:     "email",
+		SizeEstimate:    1,
+		RFC822MessageID: sql.NullString{String: "<rfc-meta-1@example.com>", Valid: true},
+		ReceivedAt:      sql.NullTime{Time: recv, Valid: true},
+		AttachmentCount: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id2 := f.NewMessage().Create(t, f.Store)
+
+	out, err := f.Store.BatchMessageMetaV2([]int64{id1, id2, 99999})
+	if err != nil {
+		t.Fatalf("BatchMessageMetaV2: %v", err)
+	}
+
+	got1 := out[id1]
+	if got1 == nil {
+		t.Fatal("id1 missing from result")
+	}
+	if got1.RFC822MessageID != "<rfc-meta-1@example.com>" {
+		t.Errorf("rfc822 = %q", got1.RFC822MessageID)
+	}
+	if got1.SourceMessageID != "src-meta-1" {
+		t.Errorf("source_message_id = %q", got1.SourceMessageID)
+	}
+	if got1.AccountEmail != "test@example.com" {
+		t.Errorf("account = %q (sources.identifier should round-trip)", got1.AccountEmail)
+	}
+	if got1.MessageType != "email" {
+		t.Errorf("message_type = %q", got1.MessageType)
+	}
+	if got1.AttachmentCount != 2 {
+		t.Errorf("attachment_count = %d, want 2", got1.AttachmentCount)
+	}
+	if !got1.ReceivedAt.Equal(recv) {
+		t.Errorf("received_at = %v, want %v", got1.ReceivedAt, recv)
+	}
+
+	// id2 exists but has no rfc822/received_at — should still appear
+	// with empty fields, not be absent.
+	if _, ok := out[id2]; !ok {
+		t.Errorf("id2 should be present even with empty meta")
+	}
+
+	// Unknown id must be absent.
+	if _, ok := out[99999]; ok {
+		t.Errorf("unknown id should be absent")
+	}
+}
+
 func TestStore_GetCorpusFingerprint(t *testing.T) {
 	f := storetest.New(t)
 
