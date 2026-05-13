@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
-	"math"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -25,6 +25,7 @@ import (
 	"github.com/wesm/msgvault/internal/remote"
 	"github.com/wesm/msgvault/internal/scheduler"
 	"github.com/wesm/msgvault/internal/search"
+	"github.com/wesm/msgvault/internal/search/hybridapi"
 	"github.com/wesm/msgvault/internal/store"
 	"github.com/wesm/msgvault/internal/vector"
 	"github.com/wesm/msgvault/internal/vector/hybrid"
@@ -1350,6 +1351,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 // hybrid engine. Returns 503 when the engine is not configured or the
 // index is stale/building; otherwise returns RRF-ranked hits hydrated
 // through the message store.
+//
+// The parse → BuildFilter → engine.Search → bulk-hydrate → score-map
+// plumbing lives in internal/search/hybridapi so /api/v2/search can
+// share it; this handler is only the v1 wire envelope.
 func (s *Server) handleHybridSearch(
 	w http.ResponseWriter, r *http.Request,
 	q, mode string, explain bool, pageSize int,
@@ -1359,109 +1364,31 @@ func (s *Server) handleHybridSearch(
 			"vector search is not configured on this server")
 		return
 	}
-	ctx := r.Context()
 	start := time.Now()
 
-	parsed := search.Parse(q)
-	freeText := strings.Join(parsed.TextTerms, " ")
-	// Vector/hybrid search requires text to embed; filter-only
-	// queries have no query vector to rank by. Callers that want
-	// pure structured filtering should use mode=fts instead of
-	// falling through to a 500 from the engine's "empty query"
-	// rejection.
-	if freeText == "" {
-		writeError(w, http.StatusBadRequest, "missing_free_text",
-			"mode=vector|hybrid requires at least one free-text term; use mode=fts for filter-only queries")
+	result, err := hybridapi.Run(r.Context(), s.hybridEngine, s.store, s.logger, hybridapi.Request{
+		Query:   q,
+		Mode:    hybrid.Mode(mode),
+		Limit:   pageSize,
+		Explain: explain,
+	})
+	if err != nil {
+		writeHybridSearchError(w, s.logger, q, mode, err)
 		return
 	}
 
-	subjectTerms := make([]string, 0, len(parsed.TextTerms))
-	for _, t := range parsed.TextTerms {
-		subjectTerms = append(subjectTerms, strings.ToLower(t))
-	}
-
-	filter, err := s.hybridEngine.BuildFilter(ctx, parsed)
-	if err != nil {
-		s.logger.Error("build hybrid filter failed", "query", q, "error", err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "filter resolution failed")
-		return
-	}
-
-	req := hybrid.SearchRequest{
-		Mode:         hybrid.Mode(mode),
-		FreeText:     freeText,
-		Filter:       filter,
-		Limit:        pageSize,
-		SubjectTerms: subjectTerms,
-		Explain:      explain,
-	}
-
-	hits, meta, err := s.hybridEngine.Search(ctx, req)
-	if err != nil {
-		switch {
-		case errors.Is(err, vector.ErrNotEnabled):
-			writeError(w, http.StatusServiceUnavailable, "vector_not_enabled",
-				"vector search is not configured")
-		case errors.Is(err, vector.ErrIndexStale):
-			writeError(w, http.StatusServiceUnavailable, "index_stale",
-				"the vector index does not match the configured model; run `msgvault build-embeddings --full-rebuild`")
-		case errors.Is(err, vector.ErrIndexBuilding):
-			writeError(w, http.StatusServiceUnavailable, "index_building",
-				"the initial vector index is still being built")
-		case errors.Is(err, vector.ErrEmbeddingTimeout):
-			writeError(w, http.StatusServiceUnavailable, "embedding_timeout",
-				"the embedding endpoint did not respond in time; retry, or raise [vector.embeddings].timeout")
-		default:
-			s.logger.Error("hybrid search failed", "query", q, "mode", mode, "error", err)
-			writeError(w, http.StatusInternalServerError, "internal_error", "search failed")
-		}
-		return
-	}
-
-	// Bulk-hydrate to avoid the per-hit GetMessage N+1: a single
-	// summary lookup pulls the base fields + recipients + labels for
-	// the whole hit set in 5 SQL round-trips, regardless of len(hits).
-	// Body and attachments are intentionally skipped — the search
-	// response only needs MessageSummary.
-	hitIDs := make([]int64, len(hits))
-	for i, h := range hits {
-		hitIDs[i] = h.MessageID
-	}
-	summaries, err := s.store.GetMessagesSummariesByIDs(hitIDs)
-	if err != nil {
-		s.logger.Warn("hydrate hybrid hits failed", "ids", len(hitIDs), "error", err)
-		summaries = nil
-	}
-	byID := make(map[int64]APIMessage, len(summaries))
-	for _, m := range summaries {
-		byID[m.ID] = m
-	}
-	items := make([]hybridSearchItem, 0, len(hits))
-	for _, h := range hits {
-		msg, ok := byID[h.MessageID]
-		if !ok {
-			// Hit referred to a row that disappeared between Search
-			// and hydration (just-deleted, retired generation, etc.).
-			// Drop it silently — same effect as the old per-hit
-			// GetMessage returning nil.
-			continue
-		}
+	items := make([]hybridSearchItem, 0, len(result.Msgs))
+	for _, msg := range result.Msgs {
 		item := hybridSearchItem{MessageSummary: toMessageSummary(msg)}
 		if explain {
-			sb := &scoreBreakdown{SubjectBoosted: h.SubjectBoosted}
-			if !math.IsNaN(h.RRFScore) {
-				v := h.RRFScore
-				sb.RRF = &v
+			if sb := result.ScoresByID[msg.ID]; sb != nil {
+				item.Score = &scoreBreakdown{
+					RRF:            sb.RRF,
+					BM25:           sb.BM25,
+					Vector:         sb.Vector,
+					SubjectBoosted: sb.SubjectBoosted,
+				}
 			}
-			if !math.IsNaN(h.BM25Score) {
-				v := h.BM25Score
-				sb.BM25 = &v
-			}
-			if !math.IsNaN(h.VectorScore) {
-				v := h.VectorScore
-				sb.Vector = &v
-			}
-			item.Score = sb
 		}
 		items = append(items, item)
 	}
@@ -1470,17 +1397,44 @@ func (s *Server) handleHybridSearch(
 		Query:         q,
 		Mode:          mode,
 		Returned:      len(items),
-		PoolSaturated: meta.PoolSaturated,
+		PoolSaturated: result.Meta.PoolSaturated,
 		Generation: generationSummary{
-			ID:          int64(meta.Generation.ID),
-			Model:       meta.Generation.Model,
-			Dimension:   meta.Generation.Dimension,
-			Fingerprint: meta.Generation.Fingerprint,
-			State:       string(meta.Generation.State),
+			ID:          int64(result.Meta.Generation.ID),
+			Model:       result.Meta.Generation.Model,
+			Dimension:   result.Meta.Generation.Dimension,
+			Fingerprint: result.Meta.Generation.Fingerprint,
+			State:       string(result.Meta.Generation.State),
 		},
 		TookMS:  time.Since(start).Milliseconds(),
 		Results: items,
 	})
+}
+
+// writeHybridSearchError maps hybridapi sentinel errors to the v1
+// wire codes. Each API surface owns its own envelope translation —
+// hybridapi never speaks HTTP itself, so this mapping is duplicated
+// (with mode-specific messages) in /api/v2/search.
+func writeHybridSearchError(w http.ResponseWriter, logger *slog.Logger, q, mode string, err error) {
+	switch {
+	case errors.Is(err, hybridapi.ErrMissingFreeText):
+		writeError(w, http.StatusBadRequest, "missing_free_text",
+			"mode=vector|hybrid requires at least one free-text term; use mode=fts for filter-only queries")
+	case errors.Is(err, vector.ErrNotEnabled):
+		writeError(w, http.StatusServiceUnavailable, "vector_not_enabled",
+			"vector search is not configured")
+	case errors.Is(err, vector.ErrIndexStale):
+		writeError(w, http.StatusServiceUnavailable, "index_stale",
+			"the vector index does not match the configured model; run `msgvault build-embeddings --full-rebuild`")
+	case errors.Is(err, vector.ErrIndexBuilding):
+		writeError(w, http.StatusServiceUnavailable, "index_building",
+			"the initial vector index is still being built")
+	case errors.Is(err, vector.ErrEmbeddingTimeout):
+		writeError(w, http.StatusServiceUnavailable, "embedding_timeout",
+			"the embedding endpoint did not respond in time; retry, or raise [vector.embeddings].timeout")
+	default:
+		logger.Error("hybrid search failed", "query", q, "mode", mode, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "search failed")
+	}
 }
 
 // handleListAccounts returns all configured accounts.
