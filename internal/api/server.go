@@ -172,6 +172,7 @@ func (s *Server) setupRouter() chi.Router {
 	// the API key.
 	r.Group(func(r chi.Router) {
 		r.Use(s.publicReadOrAuth)
+		r.Get("/m/{id}", s.handleMessageView)
 		r.Get("/t/{id}", s.handleThreadView)
 	})
 

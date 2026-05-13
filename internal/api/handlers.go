@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html/template"
 	"io"
 	"math"
 	"net/http"
@@ -643,6 +644,65 @@ func (s *Server) handleGetThread(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleMessageView serves the HTML single-message view at /m/{id}. Reuses
+// GetMessage + GetMessageBodies to assemble a chrome-less page suitable
+// for iframe-embed in a review-app pane.
+func (s *Server) handleMessageView(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeHTMLNotFound(w, "Invalid message id")
+		return
+	}
+	if s.store == nil {
+		writeHTMLError(w, http.StatusServiceUnavailable, "Database not available")
+		return
+	}
+
+	msg, err := s.store.GetMessage(id)
+	if err != nil {
+		s.logger.Error("failed to get message for HTML view", "id", id, "error", err)
+		writeHTMLError(w, http.StatusInternalServerError, "Failed to retrieve message")
+		return
+	}
+	if msg == nil {
+		writeHTMLNotFound(w, fmt.Sprintf("Message %d not found in this corpus", id))
+		return
+	}
+
+	bodyText, bodyHTML, _, err := s.fetchBodies(r.Context(), id)
+	if err != nil {
+		s.logger.Error("failed to load body for HTML view", "id", id, "error", err)
+		writeHTMLError(w, http.StatusInternalServerError, "Failed to retrieve message body")
+		return
+	}
+
+	data := messageViewData{
+		ID:             msg.ID,
+		ConversationID: msg.ConversationID,
+		Subject:        msg.Subject,
+		From:           msg.From,
+		To:             msg.To,
+		Cc:             msg.Cc,
+		SentAt:         msg.SentAt.UTC().Format("2006-01-02 15:04 MST"),
+		BodyHTML:       template.HTML(bodyHTML), //nolint:gosec // stored-by-msgvault content
+		BodyText:       bodyText,
+	}
+	for _, att := range msg.Attachments {
+		data.Attachments = append(data.Attachments, messageAttachmentView{
+			Filename: att.Filename,
+			MimeType: att.MimeType,
+			Size:     att.Size,
+		})
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	if err := messageViewTemplate.Execute(w, data); err != nil {
+		s.logger.Error("failed to render message template", "id", id, "error", err)
+	}
 }
 
 // handleThreadView serves the HTML thread view at /t/{id} — minimal chrome,

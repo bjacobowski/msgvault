@@ -70,6 +70,31 @@ const htmlBaseLayout = `<!DOCTYPE html>
 // threadViewTemplate renders APIThread inside the shared layout.
 var threadViewTemplate = template.Must(template.New("thread").Parse(htmlBaseLayout))
 
+// messageViewTemplate renders messageViewData inside the shared layout.
+var messageViewTemplate = template.Must(template.New("message").Parse(htmlBaseLayout))
+
+// messageViewData carries the fields the /m/{id} template needs. Bodies
+// are split: BodyHTML rendered as-is (already trusted msgvault-stored
+// content), BodyText shown only when no HTML part exists.
+type messageViewData struct {
+	ID             int64
+	ConversationID int64
+	Subject        string
+	From           string
+	To             []string
+	Cc             []string
+	SentAt         string
+	BodyHTML       template.HTML
+	BodyText       string
+	Attachments    []messageAttachmentView
+}
+
+type messageAttachmentView struct {
+	Filename string
+	MimeType string
+	Size     int64
+}
+
 func init() {
 	// Inner templates are defined separately so the shared base layout
 	// keeps a single source of truth.
@@ -101,6 +126,46 @@ func init() {
   {{end}}
 {{else}}
   <p class="mv-empty">No live messages in this thread.</p>
+{{end}}
+`))
+}
+
+func init() {
+	template.Must(messageViewTemplate.New("title").Parse(
+		`{{if .Subject}}{{.Subject}}{{else}}Message {{.ID}}{{end}} — msgvault`,
+	))
+	template.Must(messageViewTemplate.New("body").Parse(`
+<header class="mv">
+  <h1>{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}</h1>
+  <div class="mv-meta">
+    <span class="mv-id">message {{.ID}}</span>
+    {{if .ConversationID}}· <a href="/t/{{.ConversationID}}">thread {{.ConversationID}}</a>{{end}}
+    · {{.SentAt}}
+  </div>
+  <div class="mv-meta">
+    <div><strong>From:</strong> {{.From}}</div>
+    {{if .To}}<div><strong>To:</strong> {{range $i, $a := .To}}{{if $i}}, {{end}}{{$a}}{{end}}</div>{{end}}
+    {{if .Cc}}<div><strong>Cc:</strong> {{range $i, $a := .Cc}}{{if $i}}, {{end}}{{$a}}{{end}}</div>{{end}}
+  </div>
+</header>
+<section class="mv-body">
+  {{if .BodyHTML}}
+    {{.BodyHTML}}
+  {{else if .BodyText}}
+    <pre style="white-space: pre-wrap; font-family: inherit; margin: 0;">{{.BodyText}}</pre>
+  {{else}}
+    <p class="mv-empty">(no body)</p>
+  {{end}}
+</section>
+{{if .Attachments}}
+<aside class="mv-meta" style="margin-top: 1rem;">
+  <strong>Attachments:</strong>
+  <ul>
+    {{range .Attachments}}
+    <li>{{.Filename}} <span class="mv-id">({{.MimeType}}, {{.Size}} bytes)</span></li>
+    {{end}}
+  </ul>
+</aside>
 {{end}}
 `))
 }

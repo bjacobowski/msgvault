@@ -2685,3 +2685,68 @@ func TestHandleThreadView_HTML(t *testing.T) {
 		}
 	})
 }
+
+func TestHandleMessageView_HTML(t *testing.T) {
+	t.Run("hit renders subject body and thread link", func(t *testing.T) {
+		srv, ms := newTestServerWithMockStore(t)
+		// Mutate the seeded message to carry a conversation id we can
+		// assert on, plus an HTML body via the bodies map.
+		ms.messages[0].ConversationID = 42
+		ms.bodies = map[int64][2]string{1: {"", "<b>Important</b>"}}
+
+		req := httptest.NewRequest("GET", "/m/1", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+			t.Errorf("Content-Type = %q, want text/html prefix", ct)
+		}
+		body := w.Body.String()
+		if !strings.Contains(body, "Test Subject") {
+			t.Errorf("HTML missing subject; got: %s", body)
+		}
+		if !strings.Contains(body, "<b>Important</b>") {
+			t.Errorf("HTML missing rendered body; got: %s", body)
+		}
+		if !strings.Contains(body, `href="/t/42"`) {
+			t.Errorf("HTML missing thread back-link; got: %s", body)
+		}
+		// Should NOT contain inbox shell markers.
+		if strings.Contains(body, "Inbox") || strings.Contains(body, "sidebar") {
+			t.Errorf("HTML leaks inbox chrome into chrome-less view; got: %s", body)
+		}
+	})
+
+	t.Run("text-only body wraps in <pre>", func(t *testing.T) {
+		srv, ms := newTestServerWithMockStore(t)
+		ms.bodies = map[int64][2]string{1: {"plain line", ""}}
+
+		req := httptest.NewRequest("GET", "/m/1", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		body := w.Body.String()
+		if !strings.Contains(body, "<pre") || !strings.Contains(body, "plain line") {
+			t.Errorf("expected <pre>-wrapped plaintext; got: %s", body)
+		}
+	})
+
+	t.Run("miss renders corpus-mismatch not-found", func(t *testing.T) {
+		srv, _ := newTestServerWithMockStore(t)
+		req := httptest.NewRequest("GET", "/m/9999", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", w.Code)
+		}
+		if !strings.Contains(w.Body.String(), "not found in this corpus") {
+			t.Errorf("missing corpus-mismatch hint")
+		}
+	})
+}
