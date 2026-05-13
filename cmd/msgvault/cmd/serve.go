@@ -323,6 +323,10 @@ func (a *storeAPIAdapter) ListMessagesByParticipant(id int64, offset, limit int)
 	return a.store.ListMessagesByParticipant(id, offset, limit)
 }
 
+func (a *storeAPIAdapter) GetCorpusFingerprint() (*store.APICorpusFingerprint, error) {
+	return a.store.GetCorpusFingerprint()
+}
+
 func (a *storeAPIAdapter) GetMessagesSummariesByIDs(ids []int64) ([]api.APIMessage, error) {
 	return a.store.GetMessagesSummariesByIDs(ids)
 }

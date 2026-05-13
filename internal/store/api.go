@@ -1,7 +1,9 @@
 package store
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -34,6 +36,22 @@ type APIAttachment struct {
 	Filename string
 	MimeType string
 	Size     int64
+}
+
+// APICorpusFingerprint is the cheap "did the corpus change" digest
+// returned by /api/v1/corpus/fingerprint.
+//
+// Recipe: sha256("<message_count>|<latest_sent_at_unix>|<max_id>").
+// Stable as long as no compaction renumbers ids; changes on every
+// sync. Useful for detecting that *something* changed about the corpus
+// since an artifact was prepared. NOT a per-citation hash — for
+// content-stable references see [[per-message-content-hash]] (declined
+// for now; see PLAN-radical-roc-wishlist.md C1).
+type APICorpusFingerprint struct {
+	Fingerprint         string
+	AsOf                time.Time
+	MessageCount        int64
+	LatestMessageSentAt time.Time
 }
 
 // APILabelCount is one row of the /api/v1/labels listing: a label name
@@ -243,6 +261,53 @@ func (s *Store) GetMessage(id int64) (*APIMessage, error) {
 	m.Headers = make(map[string]string)
 
 	return &m, nil
+}
+
+// GetCorpusFingerprint computes the cheap drift-detection digest in a
+// single round-trip and returns the inputs alongside it so callers can
+// surface useful "as-of" context.
+//
+// Implementation notes:
+//   - COUNT, MAX(sent_at), MAX(id) are derived in one SELECT to keep
+//     this endpoint sub-millisecond on multi-million-row corpora.
+//   - Live messages only (source-deleted rows excluded) so the
+//     fingerprint matches what the rest of the read API exposes.
+//   - latest_sent_at is encoded as a Unix second to keep the digest
+//     stable across timezone-string normalization.
+func (s *Store) GetCorpusFingerprint() (*APICorpusFingerprint, error) {
+	live := LiveMessagesWhere("", true)
+
+	var (
+		count       int64
+		maxID       sql.NullInt64
+		latestSent  sql.NullString
+		fingerprint string
+	)
+	err := s.db.QueryRow(fmt.Sprintf(`
+		SELECT
+			COUNT(*),
+			MAX(id),
+			MAX(COALESCE(sent_at, received_at, internal_date))
+		  FROM messages WHERE %s`, live),
+	).Scan(&count, &maxID, &latestSent)
+	if err != nil {
+		return nil, fmt.Errorf("corpus fingerprint: %w", err)
+	}
+
+	fp := &APICorpusFingerprint{
+		AsOf:         time.Now().UTC(),
+		MessageCount: count,
+	}
+	if latestSent.Valid && latestSent.String != "" {
+		fp.LatestMessageSentAt = parseSQLiteTime(latestSent.String)
+	}
+
+	// sha256("<count>|<latest_sent_unix>|<max_id>") — stable inputs only.
+	h := sha256.New()
+	_, _ = fmt.Fprintf(h, "%d|%d|%d", count, fp.LatestMessageSentAt.Unix(), maxID.Int64)
+	fingerprint = "sha256:" + hex.EncodeToString(h.Sum(nil))
+	fp.Fingerprint = fingerprint
+	return fp, nil
 }
 
 // ListLabels returns label names with their live-message counts,

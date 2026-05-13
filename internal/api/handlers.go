@@ -646,6 +646,48 @@ func (s *Server) handleGetThread(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// CorpusFingerprintResponse is the JSON shape for
+// /api/v1/corpus/fingerprint. The fingerprint changes on every sync but
+// stays stable between syncs — useful for "did the corpus change at
+// all" comparisons, not for per-citation stability (see PLAN C1).
+type CorpusFingerprintResponse struct {
+	Fingerprint         string `json:"fingerprint"`
+	AsOf                string `json:"as_of"`
+	MessageCount        int64  `json:"message_count"`
+	LatestMessageSentAt string `json:"latest_message_sent_at,omitempty"`
+}
+
+// handleCorpusFingerprint serves the cheap drift digest.
+func (s *Server) handleCorpusFingerprint(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
+		return
+	}
+	fp, err := s.store.GetCorpusFingerprint()
+	if err != nil {
+		s.logger.Error("failed to compute corpus fingerprint", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to compute fingerprint")
+		return
+	}
+	// GetCorpusFingerprint always returns a non-nil result in practice —
+	// COUNT yields a single row even on an empty corpus — so a nil here
+	// would be a store-layer bug rather than an expected state.
+	if fp == nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Empty fingerprint")
+		return
+	}
+
+	resp := CorpusFingerprintResponse{
+		Fingerprint:  fp.Fingerprint,
+		AsOf:         fp.AsOf.Format(time.RFC3339),
+		MessageCount: fp.MessageCount,
+	}
+	if !fp.LatestMessageSentAt.IsZero() {
+		resp.LatestMessageSentAt = fp.LatestMessageSentAt.UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // LabelCountDTO is one row of the /api/v1/labels listing.
 type LabelCountDTO struct {
 	Name  string `json:"name"`

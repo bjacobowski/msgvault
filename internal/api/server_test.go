@@ -88,6 +88,9 @@ type mockStore struct {
 	participants          map[int64]*store.APIParticipant
 	participantMembership map[int64][]int64
 
+	// corpusFingerprint, when non-nil, is returned by GetCorpusFingerprint.
+	corpusFingerprint *store.APICorpusFingerprint
+
 	// Call counts so tests can assert that bulk hydration paths use
 	// GetMessagesSummariesByIDs (one round-trip) instead of looping
 	// GetMessage (per-hit N+1).
@@ -148,6 +151,14 @@ func (m *mockStore) GetParticipantByID(id int64) (*store.APIParticipant, error) 
 func (m *mockStore) ListMessagesByParticipant(id int64, offset, limit int) ([]APIMessage, int64, error) {
 	ids := m.participantMembership[id]
 	return m.subsetMessages(ids, offset, limit)
+}
+
+func (m *mockStore) GetCorpusFingerprint() (*store.APICorpusFingerprint, error) {
+	if m.corpusFingerprint == nil {
+		return nil, nil
+	}
+	cp := *m.corpusFingerprint
+	return &cp, nil
 }
 
 // subsetMessages emulates LIMIT/OFFSET pagination against an in-memory

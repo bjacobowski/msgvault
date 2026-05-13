@@ -3083,3 +3083,65 @@ func TestHandleLabelAndParticipantViews_HTML(t *testing.T) {
 		}
 	})
 }
+
+func TestHandleCorpusFingerprint(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	asOf := mustParseTime(t, "2026-05-13T15:00:00Z")
+	latest := mustParseTime(t, "2026-05-13T14:00:00Z")
+	ms.corpusFingerprint = &store.APICorpusFingerprint{
+		Fingerprint:         "sha256:cafebabe",
+		AsOf:                asOf,
+		MessageCount:        12483,
+		LatestMessageSentAt: latest,
+	}
+
+	req := httptest.NewRequest("GET", "/api/v1/corpus/fingerprint", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp CorpusFingerprintResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Fingerprint != "sha256:cafebabe" {
+		t.Errorf("fingerprint = %q", resp.Fingerprint)
+	}
+	if resp.MessageCount != 12483 {
+		t.Errorf("message_count = %d", resp.MessageCount)
+	}
+	if resp.AsOf != "2026-05-13T15:00:00Z" {
+		t.Errorf("as_of = %q", resp.AsOf)
+	}
+	if resp.LatestMessageSentAt != "2026-05-13T14:00:00Z" {
+		t.Errorf("latest_message_sent_at = %q", resp.LatestMessageSentAt)
+	}
+}
+
+func TestHandleCorpusFingerprint_StableAcrossCalls(t *testing.T) {
+	// Real-store smoke check: two consecutive calls without any sync
+	// in between must return the same fingerprint. Uses the mock that
+	// echoes back what GetCorpusFingerprint produced — equivalent to
+	// asserting the handler doesn't introduce its own per-call entropy.
+	srv, ms := newTestServerWithMockStore(t)
+	ms.corpusFingerprint = &store.APICorpusFingerprint{
+		Fingerprint:  "sha256:deadbeef",
+		AsOf:         mustParseTime(t, "2026-05-13T15:00:00Z"),
+		MessageCount: 100,
+	}
+
+	get := func() string {
+		req := httptest.NewRequest("GET", "/api/v1/corpus/fingerprint", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		var r CorpusFingerprintResponse
+		_ = json.NewDecoder(w.Body).Decode(&r)
+		return r.Fingerprint
+	}
+
+	if a, b := get(), get(); a != b {
+		t.Errorf("fingerprint drifted across calls: %q vs %q", a, b)
+	}
+}
