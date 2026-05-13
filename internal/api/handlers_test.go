@@ -2909,3 +2909,177 @@ func TestHandleAttachmentView_HTML(t *testing.T) {
 		}
 	})
 }
+
+func TestHandleListLabels(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	ms.labels = []store.APILabelCount{
+		{Name: "INBOX", Count: 100},
+		{Name: "REKKIE", Count: 14},
+	}
+
+	req := httptest.NewRequest("GET", "/api/v1/labels", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var resp LabelsListResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Total != 2 || len(resp.Labels) != 2 {
+		t.Errorf("total=%d labels=%d", resp.Total, len(resp.Labels))
+	}
+	if resp.Labels[0].Name != "INBOX" || resp.Labels[0].Count != 100 {
+		t.Errorf("first label = %+v", resp.Labels[0])
+	}
+}
+
+func TestHandleListMessagesByLabel(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	ms.labelMembership = map[string][]int64{"REKKIE": {1}}
+
+	t.Run("hit returns paginated messages", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v1/labels/REKKIE/messages?limit=10", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		var resp PaginatedMessagesResponse
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.Total != 1 || resp.Limit != 10 || len(resp.Messages) != 1 {
+			t.Errorf("unexpected response: %+v", resp)
+		}
+	})
+
+	t.Run("limit is clamped to maxPageSize", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v1/labels/REKKIE/messages?limit=99999", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		var resp PaginatedMessagesResponse
+		_ = json.NewDecoder(w.Body).Decode(&resp)
+		if resp.Limit != maxPageSize {
+			t.Errorf("limit = %d, want clamped to %d", resp.Limit, maxPageSize)
+		}
+	})
+
+	t.Run("unknown label returns 200 with zero results, not 404", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v1/labels/UNKNOWN/messages", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Errorf("status = %d, want 200 (empty list)", w.Code)
+		}
+	})
+}
+
+func TestHandleGetParticipant(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	first := mustParseTime(t, "2024-01-01T00:00:00Z")
+	last := mustParseTime(t, "2026-05-13T00:00:00Z")
+	ms.participants = map[int64]*store.APIParticipant{
+		42: {
+			ID: 42, Name: "Test Sender", Address: "sender@example.com",
+			Domain: "example.com", MessageCount: 5,
+			FirstSeen: first, LastSeen: last,
+		},
+	}
+
+	t.Run("hit", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v1/participants/42", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		var resp ParticipantResponse
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.Name != "Test Sender" || resp.MessageCount != 5 {
+			t.Errorf("unexpected payload: %+v", resp)
+		}
+		if resp.FirstSeen != "2024-01-01T00:00:00Z" {
+			t.Errorf("first_seen = %q", resp.FirstSeen)
+		}
+	})
+
+	t.Run("miss → 404 JSON", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v1/participants/9999", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", w.Code)
+		}
+	})
+}
+
+func TestHandleListMessagesByParticipant(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	ms.participantMembership = map[int64][]int64{42: {1}}
+
+	req := httptest.NewRequest("GET", "/api/v1/participants/42/messages", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp PaginatedMessagesResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Total != 1 || len(resp.Messages) != 1 {
+		t.Errorf("unexpected response: %+v", resp)
+	}
+}
+
+func TestHandleLabelAndParticipantViews_HTML(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	ms.labelMembership = map[string][]int64{"REKKIE": {1}}
+	ms.participants = map[int64]*store.APIParticipant{
+		42: {ID: 42, Name: "Alice", Address: "alice@example.com",
+			MessageCount: 1, FirstSeen: mustParseTime(t, "2024-01-01T00:00:00Z"), LastSeen: mustParseTime(t, "2024-06-01T00:00:00Z")},
+	}
+	ms.participantMembership = map[int64][]int64{42: {1}}
+
+	t.Run("/l/<name> renders message list", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/l/REKKIE", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		body := w.Body.String()
+		if !strings.Contains(body, "REKKIE") {
+			t.Errorf("HTML missing label name")
+		}
+		if !strings.Contains(body, `href="/m/1"`) {
+			t.Errorf("HTML missing message back-link; got: %s", body)
+		}
+	})
+
+	t.Run("/p/<id> renders participant page", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/p/42", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		body := w.Body.String()
+		if !strings.Contains(body, "Alice") || !strings.Contains(body, "alice@example.com") {
+			t.Errorf("HTML missing participant identity; got: %s", body)
+		}
+	})
+
+	t.Run("/p/<unknown> renders not-found", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/p/9999", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", w.Code)
+		}
+	})
+}

@@ -76,6 +76,45 @@ var messageViewTemplate = template.Must(template.New("message").Parse(htmlBaseLa
 // attachmentViewTemplate renders attachmentViewData inside the shared layout.
 var attachmentViewTemplate = template.Must(template.New("attachment").Parse(htmlBaseLayout))
 
+// labelViewTemplate renders labelViewData inside the shared layout.
+var labelViewTemplate = template.Must(template.New("label").Parse(htmlBaseLayout))
+
+// labelViewData drives the /l/{name} view: a paginated list of messages
+// tagged with the given label.
+type labelViewData struct {
+	Name     string
+	Total    int64
+	Offset   int
+	Limit    int
+	Messages []labelMessageRow
+}
+
+type labelMessageRow struct {
+	ID      int64
+	Subject string
+	From    string
+	SentAt  string
+	Snippet string
+}
+
+// participantViewTemplate renders participantViewData inside the shared layout.
+var participantViewTemplate = template.Must(template.New("participant").Parse(htmlBaseLayout))
+
+// participantViewData drives the /p/{id} view: header (name + address +
+// stats) plus a paginated message list.
+type participantViewData struct {
+	ID           int64
+	Name         string
+	Address      string
+	Domain       string
+	MessageCount int64
+	FirstSeen    string
+	LastSeen     string
+	Offset       int
+	Limit        int
+	Messages     []labelMessageRow // same shape as label view
+}
+
 // attachmentViewData drives the /attachment/{id} preview page.
 //
 // PreviewMode controls the inline rendering strategy:
@@ -213,6 +252,64 @@ func init() {
 {{else}}
   <p>This attachment type isn't previewed inline.</p>
   <p><a href="{{.ContentURL}}">Download {{.Filename}}</a></p>
+{{end}}
+`))
+}
+
+func init() {
+	template.Must(labelViewTemplate.New("title").Parse(`{{.Name}} — msgvault`))
+	template.Must(labelViewTemplate.New("body").Parse(`
+<header class="mv">
+  <h1>{{.Name}}</h1>
+  <div class="mv-meta">
+    <span class="mv-id">label {{.Name}}</span> · {{.Total}} message{{if ne .Total 1}}s{{end}}
+  </div>
+</header>
+{{if .Messages}}
+  {{range .Messages}}
+  <div class="mv-message">
+    <div class="mv-message-head">
+      <span class="mv-from">{{.From}}</span>
+      <span class="mv-meta">{{.SentAt}} · <a href="/m/{{.ID}}">open</a></span>
+    </div>
+    {{if .Subject}}<div><strong>{{.Subject}}</strong></div>{{end}}
+    {{if .Snippet}}<div class="mv-snippet">{{.Snippet}}</div>{{end}}
+  </div>
+  {{end}}
+{{else}}
+  <p class="mv-empty">No messages with this label.</p>
+{{end}}
+`))
+
+	template.Must(participantViewTemplate.New("title").Parse(
+		`{{if .Name}}{{.Name}}{{else}}{{.Address}}{{end}} — msgvault`,
+	))
+	template.Must(participantViewTemplate.New("body").Parse(`
+<header class="mv">
+  <h1>{{if .Name}}{{.Name}}{{else}}{{.Address}}{{end}}</h1>
+  <div class="mv-meta">
+    <span class="mv-id">participant {{.ID}}</span> ·
+    {{.Address}}{{if .Domain}} · {{.Domain}}{{end}}
+  </div>
+  <div class="mv-meta">
+    {{.MessageCount}} message{{if ne .MessageCount 1}}s{{end}}
+    {{if .FirstSeen}}· first {{.FirstSeen}}{{end}}
+    {{if .LastSeen}}· last {{.LastSeen}}{{end}}
+  </div>
+</header>
+{{if .Messages}}
+  {{range .Messages}}
+  <div class="mv-message">
+    <div class="mv-message-head">
+      <span class="mv-from">{{.From}}</span>
+      <span class="mv-meta">{{.SentAt}} · <a href="/m/{{.ID}}">open</a></span>
+    </div>
+    {{if .Subject}}<div><strong>{{.Subject}}</strong></div>{{end}}
+    {{if .Snippet}}<div class="mv-snippet">{{.Snippet}}</div>{{end}}
+  </div>
+  {{end}}
+{{else}}
+  <p class="mv-empty">No messages involving this participant.</p>
 {{end}}
 `))
 }

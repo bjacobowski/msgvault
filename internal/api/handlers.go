@@ -646,6 +646,281 @@ func (s *Server) handleGetThread(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// LabelCountDTO is one row of the /api/v1/labels listing.
+type LabelCountDTO struct {
+	Name  string `json:"name"`
+	Count int64  `json:"count"`
+}
+
+// LabelsListResponse wraps the labels list with the total count.
+type LabelsListResponse struct {
+	Total  int             `json:"total"`
+	Labels []LabelCountDTO `json:"labels"`
+}
+
+// PaginatedMessagesResponse is the shape used by label and participant
+// message listings. Distinct from the page/page_size shape used by
+// /api/v1/messages because these endpoints take limit/offset directly.
+type PaginatedMessagesResponse struct {
+	Total    int64            `json:"total"`
+	Offset   int              `json:"offset"`
+	Limit    int              `json:"limit"`
+	Messages []MessageSummary `json:"messages"`
+}
+
+// ParticipantResponse is the JSON shape for /api/v1/participants/{id}.
+type ParticipantResponse struct {
+	ID           int64  `json:"id"`
+	Name         string `json:"name,omitempty"`
+	Address      string `json:"address"`
+	Domain       string `json:"domain,omitempty"`
+	MessageCount int64  `json:"message_count"`
+	FirstSeen    string `json:"first_seen,omitempty"`
+	LastSeen     string `json:"last_seen,omitempty"`
+}
+
+// parseLimitOffset reads limit and offset query params, clamping limit
+// to [1, maxPageSize] (default 50) and offset to >= 0.
+func parseLimitOffset(r *http.Request) (limit, offset int) {
+	limit, _ = strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit < 1 {
+		limit = 50
+	}
+	if limit > maxPageSize {
+		limit = maxPageSize
+	}
+	offset, _ = strconv.Atoi(r.URL.Query().Get("offset"))
+	if offset < 0 {
+		offset = 0
+	}
+	return limit, offset
+}
+
+// handleListLabels serves the global labels list with per-label counts.
+func (s *Server) handleListLabels(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
+		return
+	}
+	labels, err := s.store.ListLabels()
+	if err != nil {
+		s.logger.Error("failed to list labels", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve labels")
+		return
+	}
+	out := make([]LabelCountDTO, 0, len(labels))
+	for _, l := range labels {
+		out = append(out, LabelCountDTO{Name: l.Name, Count: l.Count})
+	}
+	writeJSON(w, http.StatusOK, LabelsListResponse{Total: len(out), Labels: out})
+}
+
+// handleListMessagesByLabel serves a paginated list of messages tagged
+// with the given label name.
+func (s *Server) handleListMessagesByLabel(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "invalid_name", "Label name is required")
+		return
+	}
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
+		return
+	}
+	limit, offset := parseLimitOffset(r)
+
+	messages, total, err := s.store.ListMessagesByLabel(name, offset, limit)
+	if err != nil {
+		s.logger.Error("failed to list messages by label", "name", name, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve messages")
+		return
+	}
+	summaries := make([]MessageSummary, len(messages))
+	for i, m := range messages {
+		summaries[i] = toMessageSummary(m)
+	}
+	writeJSON(w, http.StatusOK, PaginatedMessagesResponse{
+		Total: total, Offset: offset, Limit: limit, Messages: summaries,
+	})
+}
+
+// handleGetParticipant serves the JSON detail for a single participant.
+func (s *Server) handleGetParticipant(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "Participant ID must be a number")
+		return
+	}
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
+		return
+	}
+
+	p, err := s.store.GetParticipantByID(id)
+	if err != nil {
+		s.logger.Error("failed to get participant", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve participant")
+		return
+	}
+	if p == nil {
+		writeError(w, http.StatusNotFound, "not_found", "Participant not found")
+		return
+	}
+
+	resp := ParticipantResponse{
+		ID:           p.ID,
+		Name:         p.Name,
+		Address:      p.Address,
+		Domain:       p.Domain,
+		MessageCount: p.MessageCount,
+	}
+	if !p.FirstSeen.IsZero() {
+		resp.FirstSeen = p.FirstSeen.UTC().Format(time.RFC3339)
+	}
+	if !p.LastSeen.IsZero() {
+		resp.LastSeen = p.LastSeen.UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleListMessagesByParticipant returns paginated messages involving the
+// given participant in any recipient_type (from, to, cc, bcc).
+func (s *Server) handleListMessagesByParticipant(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "Participant ID must be a number")
+		return
+	}
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
+		return
+	}
+	limit, offset := parseLimitOffset(r)
+
+	messages, total, err := s.store.ListMessagesByParticipant(id, offset, limit)
+	if err != nil {
+		s.logger.Error("failed to list messages by participant", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve messages")
+		return
+	}
+	summaries := make([]MessageSummary, len(messages))
+	for i, m := range messages {
+		summaries[i] = toMessageSummary(m)
+	}
+	writeJSON(w, http.StatusOK, PaginatedMessagesResponse{
+		Total: total, Offset: offset, Limit: limit, Messages: summaries,
+	})
+}
+
+// handleLabelView serves the HTML view at /l/{name}.
+func (s *Server) handleLabelView(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	if name == "" {
+		writeHTMLNotFound(w, "Label name is required")
+		return
+	}
+	if s.store == nil {
+		writeHTMLError(w, http.StatusServiceUnavailable, "Database not available")
+		return
+	}
+	limit, offset := parseLimitOffset(r)
+
+	messages, total, err := s.store.ListMessagesByLabel(name, offset, limit)
+	if err != nil {
+		s.logger.Error("failed to list messages by label", "name", name, "error", err)
+		writeHTMLError(w, http.StatusInternalServerError, "Failed to retrieve messages")
+		return
+	}
+
+	data := labelViewData{
+		Name:   name,
+		Total:  total,
+		Offset: offset,
+		Limit:  limit,
+	}
+	for _, m := range messages {
+		data.Messages = append(data.Messages, labelMessageRow{
+			ID:      m.ID,
+			Subject: m.Subject,
+			From:    m.From,
+			SentAt:  m.SentAt.UTC().Format("2006-01-02 15:04 MST"),
+			Snippet: m.Snippet,
+		})
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	if err := labelViewTemplate.Execute(w, data); err != nil {
+		s.logger.Error("failed to render label template", "name", name, "error", err)
+	}
+}
+
+// handleParticipantView serves the HTML view at /p/{id}.
+func (s *Server) handleParticipantView(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeHTMLNotFound(w, "Invalid participant id")
+		return
+	}
+	if s.store == nil {
+		writeHTMLError(w, http.StatusServiceUnavailable, "Database not available")
+		return
+	}
+
+	p, err := s.store.GetParticipantByID(id)
+	if err != nil {
+		s.logger.Error("failed to get participant for HTML view", "id", id, "error", err)
+		writeHTMLError(w, http.StatusInternalServerError, "Failed to retrieve participant")
+		return
+	}
+	if p == nil {
+		writeHTMLNotFound(w, fmt.Sprintf("Participant %d not found in this corpus", id))
+		return
+	}
+
+	limit, offset := parseLimitOffset(r)
+	messages, _, err := s.store.ListMessagesByParticipant(id, offset, limit)
+	if err != nil {
+		s.logger.Error("failed to list messages by participant", "id", id, "error", err)
+		writeHTMLError(w, http.StatusInternalServerError, "Failed to retrieve messages")
+		return
+	}
+
+	data := participantViewData{
+		ID:           p.ID,
+		Name:         p.Name,
+		Address:      p.Address,
+		Domain:       p.Domain,
+		MessageCount: p.MessageCount,
+		Offset:       offset,
+		Limit:        limit,
+	}
+	if !p.FirstSeen.IsZero() {
+		data.FirstSeen = p.FirstSeen.UTC().Format("2006-01-02")
+	}
+	if !p.LastSeen.IsZero() {
+		data.LastSeen = p.LastSeen.UTC().Format("2006-01-02")
+	}
+	for _, m := range messages {
+		data.Messages = append(data.Messages, labelMessageRow{
+			ID:      m.ID,
+			Subject: m.Subject,
+			From:    m.From,
+			SentAt:  m.SentAt.UTC().Format("2006-01-02 15:04 MST"),
+			Snippet: m.Snippet,
+		})
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	if err := participantViewTemplate.Execute(w, data); err != nil {
+		s.logger.Error("failed to render participant template", "id", id, "error", err)
+	}
+}
+
 // AttachmentResponse is the JSON metadata for /api/v1/attachments/{id}.
 type AttachmentResponse struct {
 	ID          int64  `json:"id"`

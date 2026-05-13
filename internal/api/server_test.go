@@ -80,6 +80,14 @@ type mockStore struct {
 	// attachmentsByID, keyed by attachment id, used by the attachment endpoints.
 	attachmentsByID map[int64]*store.APIAttachmentDetail
 
+	// labels and labelMembership drive the labels endpoints.
+	labels          []store.APILabelCount
+	labelMembership map[string][]int64
+
+	// participants and participantMembership drive the participants endpoints.
+	participants          map[int64]*store.APIParticipant
+	participantMembership map[int64][]int64
+
 	// Call counts so tests can assert that bulk hydration paths use
 	// GetMessagesSummariesByIDs (one round-trip) instead of looping
 	// GetMessage (per-hit N+1).
@@ -115,6 +123,55 @@ func (m *mockStore) GetMessageByRFC822ID(rfc822ID string) (*APIMessage, error) {
 		return nil, nil
 	}
 	return m.GetMessage(id)
+}
+
+func (m *mockStore) ListLabels() ([]store.APILabelCount, error) {
+	return m.labels, nil
+}
+
+func (m *mockStore) ListMessagesByLabel(name string, offset, limit int) ([]APIMessage, int64, error) {
+	ids := m.labelMembership[name]
+	return m.subsetMessages(ids, offset, limit)
+}
+
+func (m *mockStore) GetParticipantByID(id int64) (*store.APIParticipant, error) {
+	if m.participants == nil {
+		return nil, nil
+	}
+	p, ok := m.participants[id]
+	if !ok {
+		return nil, nil
+	}
+	return p, nil
+}
+
+func (m *mockStore) ListMessagesByParticipant(id int64, offset, limit int) ([]APIMessage, int64, error) {
+	ids := m.participantMembership[id]
+	return m.subsetMessages(ids, offset, limit)
+}
+
+// subsetMessages emulates LIMIT/OFFSET pagination against an in-memory
+// id list, used by the label and participant listing tests.
+func (m *mockStore) subsetMessages(ids []int64, offset, limit int) ([]APIMessage, int64, error) {
+	byID := make(map[int64]APIMessage, len(m.messages))
+	for _, msg := range m.messages {
+		byID[msg.ID] = msg
+	}
+	total := int64(len(ids))
+	if offset >= len(ids) {
+		return nil, total, nil
+	}
+	end := offset + limit
+	if end > len(ids) {
+		end = len(ids)
+	}
+	out := make([]APIMessage, 0, end-offset)
+	for _, id := range ids[offset:end] {
+		if msg, ok := byID[id]; ok {
+			out = append(out, msg)
+		}
+	}
+	return out, total, nil
 }
 
 func (m *mockStore) GetAttachmentByID(id int64) (*store.APIAttachmentDetail, error) {

@@ -307,6 +307,22 @@ func (a *storeAPIAdapter) GetAttachmentByID(id int64) (*store.APIAttachmentDetai
 	return a.store.GetAttachmentByID(id)
 }
 
+func (a *storeAPIAdapter) ListLabels() ([]store.APILabelCount, error) {
+	return a.store.ListLabels()
+}
+
+func (a *storeAPIAdapter) ListMessagesByLabel(name string, offset, limit int) ([]api.APIMessage, int64, error) {
+	return a.store.ListMessagesByLabel(name, offset, limit)
+}
+
+func (a *storeAPIAdapter) GetParticipantByID(id int64) (*store.APIParticipant, error) {
+	return a.store.GetParticipantByID(id)
+}
+
+func (a *storeAPIAdapter) ListMessagesByParticipant(id int64, offset, limit int) ([]api.APIMessage, int64, error) {
+	return a.store.ListMessagesByParticipant(id, offset, limit)
+}
+
 func (a *storeAPIAdapter) GetMessagesSummariesByIDs(ids []int64) ([]api.APIMessage, error) {
 	return a.store.GetMessagesSummariesByIDs(ids)
 }

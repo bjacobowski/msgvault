@@ -36,6 +36,28 @@ type APIAttachment struct {
 	Size     int64
 }
 
+// APILabelCount is one row of the /api/v1/labels listing: a label name
+// and the number of live messages bearing it. Aggregated across all
+// sources — Gmail's INBOX, IMPORTANT, etc. collapse across accounts.
+type APILabelCount struct {
+	Name  string
+	Count int64
+}
+
+// APIParticipant is the per-id participant detail used by
+// /api/v1/participants/{id}. FirstSeen / LastSeen are zero when the
+// participant exists in the participants table but has no recipient
+// rows (rare; usually orphaned imports).
+type APIParticipant struct {
+	ID           int64
+	Name         string
+	Address      string // email when present, falls back to phone
+	Domain       string
+	MessageCount int64
+	FirstSeen    time.Time
+	LastSeen     time.Time
+}
+
 // APIAttachmentDetail is the standalone attachment shape used by
 // /api/v1/attachments/{id}. It carries everything the API server needs
 // to locate, label, and serve the on-disk file. Distinct from
@@ -223,6 +245,197 @@ func (s *Store) GetMessage(id int64) (*APIMessage, error) {
 	return &m, nil
 }
 
+// ListLabels returns label names with their live-message counts,
+// aggregated across all sources. Same-named labels from different
+// sources collapse to one row.
+func (s *Store) ListLabels() ([]APILabelCount, error) {
+	query := fmt.Sprintf(`
+		SELECT l.name, COUNT(ml.message_id) AS cnt
+		  FROM labels l
+		  JOIN message_labels ml ON ml.label_id = l.id
+		  JOIN messages m ON m.id = ml.message_id
+		 WHERE %s
+		 GROUP BY l.name
+		 ORDER BY cnt DESC, l.name ASC
+	`, LiveMessagesWhere("m", true))
+
+	rows, err := s.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("list labels: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []APILabelCount
+	for rows.Next() {
+		var lc APILabelCount
+		if err := rows.Scan(&lc.Name, &lc.Count); err != nil {
+			return nil, fmt.Errorf("scan label row: %w", err)
+		}
+		out = append(out, lc)
+	}
+	return out, rows.Err()
+}
+
+// ListMessagesByLabel returns a paginated list of live messages tagged
+// with the given label name. Sort order matches ListMessages: newest
+// first by sent_at.
+func (s *Store) ListMessagesByLabel(name string, offset, limit int) ([]APIMessage, int64, error) {
+	live := LiveMessagesWhere("m", true)
+
+	var total int64
+	err := s.db.QueryRow(fmt.Sprintf(`
+		SELECT COUNT(*)
+		  FROM messages m
+		 WHERE EXISTS (
+		     SELECT 1 FROM message_labels ml
+		       JOIN labels l ON l.id = ml.label_id
+		      WHERE ml.message_id = m.id AND l.name = ?
+		 ) AND %s`, live), name).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count by label: %w", err)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			m.id,
+			COALESCE(m.conversation_id, 0),
+			COALESCE(m.subject, ''),
+			COALESCE(p.email_address, ''),
+			COALESCE(m.sent_at, m.received_at, m.internal_date),
+			COALESCE(m.snippet, ''),
+			m.has_attachments,
+			m.size_estimate
+		  FROM messages m
+		  LEFT JOIN message_recipients mr ON mr.message_id = m.id AND mr.recipient_type = 'from'
+		  LEFT JOIN participants p ON p.id = mr.participant_id
+		 WHERE EXISTS (
+		     SELECT 1 FROM message_labels ml
+		       JOIN labels l ON l.id = ml.label_id
+		      WHERE ml.message_id = m.id AND l.name = ?
+		 ) AND %s
+		 ORDER BY COALESCE(m.sent_at, m.received_at, m.internal_date) DESC
+		 LIMIT ? OFFSET ?
+	`, live)
+
+	rows, err := s.db.Query(query, name, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list by label: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	messages, ids, err := scanMessageRows(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(ids) > 0 {
+		if err := s.batchPopulate(messages, ids); err != nil {
+			return nil, 0, err
+		}
+	}
+	return messages, total, nil
+}
+
+// GetParticipantByID resolves a participant id to its display profile
+// (name, address, domain) plus aggregate stats (message count and
+// first/last seen). Returns nil with no error when the id is unknown.
+func (s *Store) GetParticipantByID(id int64) (*APIParticipant, error) {
+	var p APIParticipant
+	var name, email, phone, domain sql.NullString
+	err := s.db.QueryRow(
+		`SELECT id, COALESCE(display_name, ''), COALESCE(email_address, ''),
+		        COALESCE(phone_number, ''), COALESCE(domain, '')
+		   FROM participants WHERE id = ?`,
+		id,
+	).Scan(&p.ID, &name, &email, &phone, &domain)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get participant: %w", err)
+	}
+	p.Name = name.String
+	p.Address = email.String
+	if p.Address == "" {
+		p.Address = phone.String
+	}
+	p.Domain = domain.String
+
+	var firstSeen, lastSeen sql.NullString
+	err = s.db.QueryRow(fmt.Sprintf(`
+		SELECT COUNT(*),
+		       MIN(COALESCE(m.sent_at, m.received_at, m.internal_date)),
+		       MAX(COALESCE(m.sent_at, m.received_at, m.internal_date))
+		  FROM messages m
+		 WHERE EXISTS (
+		     SELECT 1 FROM message_recipients mr
+		      WHERE mr.message_id = m.id AND mr.participant_id = ?
+		 ) AND %s`, LiveMessagesWhere("m", true)),
+		id,
+	).Scan(&p.MessageCount, &firstSeen, &lastSeen)
+	if err != nil {
+		return nil, fmt.Errorf("participant aggregates: %w", err)
+	}
+	if firstSeen.Valid && firstSeen.String != "" {
+		p.FirstSeen = parseSQLiteTime(firstSeen.String)
+	}
+	if lastSeen.Valid && lastSeen.String != "" {
+		p.LastSeen = parseSQLiteTime(lastSeen.String)
+	}
+	return &p, nil
+}
+
+// ListMessagesByParticipant returns a paginated list of live messages
+// involving the given participant in any recipient_type (from, to, cc,
+// bcc). Sort order matches ListMessages.
+func (s *Store) ListMessagesByParticipant(id int64, offset, limit int) ([]APIMessage, int64, error) {
+	live := LiveMessagesWhere("m", true)
+	involves := `EXISTS (SELECT 1 FROM message_recipients mr WHERE mr.message_id = m.id AND mr.participant_id = ?)`
+
+	var total int64
+	err := s.db.QueryRow(
+		fmt.Sprintf(`SELECT COUNT(*) FROM messages m WHERE %s AND %s`, involves, live),
+		id,
+	).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count by participant: %w", err)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			m.id,
+			COALESCE(m.conversation_id, 0),
+			COALESCE(m.subject, ''),
+			COALESCE(p.email_address, ''),
+			COALESCE(m.sent_at, m.received_at, m.internal_date),
+			COALESCE(m.snippet, ''),
+			m.has_attachments,
+			m.size_estimate
+		  FROM messages m
+		  LEFT JOIN message_recipients mr_from ON mr_from.message_id = m.id AND mr_from.recipient_type = 'from'
+		  LEFT JOIN participants p ON p.id = mr_from.participant_id
+		 WHERE %s AND %s
+		 ORDER BY COALESCE(m.sent_at, m.received_at, m.internal_date) DESC
+		 LIMIT ? OFFSET ?
+	`, involves, live)
+
+	rows, err := s.db.Query(query, id, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list by participant: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	messages, ids, err := scanMessageRows(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(ids) > 0 {
+		if err := s.batchPopulate(messages, ids); err != nil {
+			return nil, 0, err
+		}
+	}
+	return messages, total, nil
+}
+
 // GetAttachmentByID looks up a single attachment by its primary key,
 // returning the metadata plus on-disk location needed to serve the file.
 // Returns nil with no error when the attachment does not exist.
@@ -303,10 +516,8 @@ func (s *Store) GetThread(id int64) (*APIThread, error) {
 		if err := rows.Scan(&tm.ID, &tm.FromName, &tm.From, &sentAtStr, &tm.Snippet); err != nil {
 			return nil, fmt.Errorf("scan thread message: %w", err)
 		}
-		if sentAtStr.Valid {
-			if parsed, perr := parseStoredTimestamp(sentAtStr.String); perr == nil {
-				tm.SentAt = parsed
-			}
+		if sentAtStr.Valid && sentAtStr.String != "" {
+			tm.SentAt = parseSQLiteTime(sentAtStr.String)
 		}
 		t.Messages = append(t.Messages, tm)
 	}
@@ -345,18 +556,6 @@ func (s *Store) GetThread(id int64) (*APIThread, error) {
 	}
 
 	return t, nil
-}
-
-// parseStoredTimestamp parses a SQLite datetime string into a UTC time.
-// Accepts both the standard "YYYY-MM-DD HH:MM:SS" and RFC3339 forms that
-// appear across the codebase.
-func parseStoredTimestamp(s string) (time.Time, error) {
-	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05", "2006-01-02T15:04:05Z"} {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t.UTC(), nil
-		}
-	}
-	return time.Time{}, fmt.Errorf("unrecognized timestamp %q", s)
 }
 
 // GetMessageBodies returns the raw text and HTML body parts for a message,
