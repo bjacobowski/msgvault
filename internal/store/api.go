@@ -36,6 +36,36 @@ type APIAttachment struct {
 	Size     int64
 }
 
+// APIThread represents a conversation/thread for API responses. Messages
+// are ordered by sent_at ascending so review apps can render them
+// top-to-bottom in chronological order.
+type APIThread struct {
+	ID           int64
+	Subject      string
+	MessageCount int64
+	Participants []APIThreadParticipant
+	Messages     []APIThreadMessage
+}
+
+// APIThreadParticipant identifies one party in a thread. Name may be empty
+// for participants we only ever saw as a bare address.
+type APIThreadParticipant struct {
+	ID      int64
+	Name    string
+	Address string
+}
+
+// APIThreadMessage is the compact per-message summary used inside a thread
+// response. Full bodies are fetched via /api/v1/messages/{id} or
+// /api/v1/messages/{id}/body.
+type APIThreadMessage struct {
+	ID       int64
+	SentAt   time.Time
+	FromName string
+	From     string
+	Snippet  string
+}
+
 // ListMessages returns a paginated list of messages with batch-loaded recipients and labels.
 func (s *Store) ListMessages(offset, limit int) ([]APIMessage, int64, error) {
 	// Get total count. Use the canonical live-messages predicate so
@@ -176,6 +206,116 @@ func (s *Store) GetMessage(id int64) (*APIMessage, error) {
 	m.Headers = make(map[string]string)
 
 	return &m, nil
+}
+
+// GetThread returns the thread (conversation) with the given id, including
+// its compact subject, deduplicated participants, and the per-message
+// summaries needed to render a review-pane view. Returns nil with no
+// error when no thread matches.
+//
+// Only live messages count toward MessageCount and appear in Messages;
+// source-deleted rows are filtered via LiveMessagesWhere so the response
+// matches what /api/v1/messages already returns.
+func (s *Store) GetThread(id int64) (*APIThread, error) {
+	t := &APIThread{ID: id}
+
+	// Conversation header (subject lives in conversations.title for email).
+	var title sql.NullString
+	err := s.db.QueryRow(
+		`SELECT COALESCE(title, '') FROM conversations WHERE id = ?`,
+		id,
+	).Scan(&title)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get thread header: %w", err)
+	}
+	t.Subject = title.String
+
+	// Messages (live only), ordered chronologically.
+	msgQuery := fmt.Sprintf(`
+		SELECT
+			m.id,
+			COALESCE(p.display_name, '') as from_name,
+			COALESCE(p.email_address, '') as from_email,
+			COALESCE(m.sent_at, m.received_at, m.internal_date) as sent_at,
+			COALESCE(m.snippet, '') as snippet
+		FROM messages m
+		LEFT JOIN message_recipients mr ON mr.message_id = m.id AND mr.recipient_type = 'from'
+		LEFT JOIN participants p ON p.id = mr.participant_id
+		WHERE m.conversation_id = ? AND %s
+		ORDER BY sent_at ASC, m.id ASC
+	`, LiveMessagesWhere("m", true))
+
+	rows, err := s.db.Query(msgQuery, id)
+	if err != nil {
+		return nil, fmt.Errorf("get thread messages: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var (
+			tm        APIThreadMessage
+			sentAtStr sql.NullString
+		)
+		if err := rows.Scan(&tm.ID, &tm.FromName, &tm.From, &sentAtStr, &tm.Snippet); err != nil {
+			return nil, fmt.Errorf("scan thread message: %w", err)
+		}
+		if sentAtStr.Valid {
+			if parsed, perr := parseStoredTimestamp(sentAtStr.String); perr == nil {
+				tm.SentAt = parsed
+			}
+		}
+		t.Messages = append(t.Messages, tm)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate thread messages: %w", err)
+	}
+	t.MessageCount = int64(len(t.Messages))
+
+	// Participants: distinct senders + recipients across all live messages
+	// in the thread. Cheaper than reading conversation_participants and
+	// keeps the response self-consistent with Messages.
+	partQuery := fmt.Sprintf(`
+		SELECT DISTINCT p.id, COALESCE(p.display_name, ''), COALESCE(p.email_address, '')
+		FROM participants p
+		JOIN message_recipients mr ON mr.participant_id = p.id
+		JOIN messages m ON m.id = mr.message_id
+		WHERE m.conversation_id = ? AND %s
+		ORDER BY p.id
+	`, LiveMessagesWhere("m", true))
+
+	prows, err := s.db.Query(partQuery, id)
+	if err != nil {
+		return nil, fmt.Errorf("get thread participants: %w", err)
+	}
+	defer func() { _ = prows.Close() }()
+
+	for prows.Next() {
+		var p APIThreadParticipant
+		if err := prows.Scan(&p.ID, &p.Name, &p.Address); err != nil {
+			return nil, fmt.Errorf("scan thread participant: %w", err)
+		}
+		t.Participants = append(t.Participants, p)
+	}
+	if err := prows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate thread participants: %w", err)
+	}
+
+	return t, nil
+}
+
+// parseStoredTimestamp parses a SQLite datetime string into a UTC time.
+// Accepts both the standard "YYYY-MM-DD HH:MM:SS" and RFC3339 forms that
+// appear across the codebase.
+func parseStoredTimestamp(s string) (time.Time, error) {
+	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05", "2006-01-02T15:04:05Z"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t.UTC(), nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("unrecognized timestamp %q", s)
 }
 
 // GetMessageBodies returns the raw text and HTML body parts for a message,

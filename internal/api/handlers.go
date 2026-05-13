@@ -565,6 +565,118 @@ func htmlEscape(s string) string {
 // the engine nor the store can answer.
 var errStoreUnavailable = errors.New("store unavailable")
 
+// ThreadResponse is the JSON shape returned by /api/v1/threads/{id}.
+type ThreadResponse struct {
+	ID           int64                  `json:"id"`
+	Subject      string                 `json:"subject"`
+	MessageCount int64                  `json:"message_count"`
+	Participants []ThreadParticipantDTO `json:"participants"`
+	Messages     []ThreadMessageDTO     `json:"messages"`
+}
+
+// ThreadParticipantDTO names a single party in a thread.
+type ThreadParticipantDTO struct {
+	ID      int64  `json:"id"`
+	Name    string `json:"name,omitempty"`
+	Address string `json:"address"`
+}
+
+// ThreadMessageDTO is the compact summary embedded under a thread response.
+type ThreadMessageDTO struct {
+	ID      int64         `json:"id"`
+	SentAt  string        `json:"sent_at"`
+	From    ThreadFromDTO `json:"from"`
+	Snippet string        `json:"snippet,omitempty"`
+}
+
+// ThreadFromDTO carries the per-message sender address and display name.
+type ThreadFromDTO struct {
+	Name    string `json:"name,omitempty"`
+	Address string `json:"address"`
+}
+
+// handleGetThread serves the JSON thread view. 404 with a consistent JSON
+// error body when no thread matches the id.
+func (s *Server) handleGetThread(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "Thread ID must be a number")
+		return
+	}
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
+		return
+	}
+
+	th, err := s.store.GetThread(id)
+	if err != nil {
+		s.logger.Error("failed to get thread", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve thread")
+		return
+	}
+	if th == nil {
+		writeError(w, http.StatusNotFound, "not_found", "Thread not found")
+		return
+	}
+
+	resp := ThreadResponse{
+		ID:           th.ID,
+		Subject:      th.Subject,
+		MessageCount: th.MessageCount,
+		Participants: make([]ThreadParticipantDTO, 0, len(th.Participants)),
+		Messages:     make([]ThreadMessageDTO, 0, len(th.Messages)),
+	}
+	for _, p := range th.Participants {
+		resp.Participants = append(resp.Participants, ThreadParticipantDTO{
+			ID:      p.ID,
+			Name:    p.Name,
+			Address: p.Address,
+		})
+	}
+	for _, m := range th.Messages {
+		resp.Messages = append(resp.Messages, ThreadMessageDTO{
+			ID:      m.ID,
+			SentAt:  m.SentAt.UTC().Format(time.RFC3339),
+			From:    ThreadFromDTO{Name: m.FromName, Address: m.From},
+			Snippet: m.Snippet,
+		})
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleThreadView serves the HTML thread view at /t/{id} — minimal chrome,
+// no JS, no external CSS, safe to iframe-embed.
+func (s *Server) handleThreadView(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeHTMLNotFound(w, "Invalid thread id")
+		return
+	}
+	if s.store == nil {
+		writeHTMLError(w, http.StatusServiceUnavailable, "Database not available")
+		return
+	}
+
+	th, err := s.store.GetThread(id)
+	if err != nil {
+		s.logger.Error("failed to get thread for HTML view", "id", id, "error", err)
+		writeHTMLError(w, http.StatusInternalServerError, "Failed to retrieve thread")
+		return
+	}
+	if th == nil {
+		writeHTMLNotFound(w, fmt.Sprintf("Thread %d not found in this corpus", id))
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	if err := threadViewTemplate.Execute(w, th); err != nil {
+		s.logger.Error("failed to render thread template", "id", id, "error", err)
+	}
+}
+
 // handleSearch searches messages.
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {

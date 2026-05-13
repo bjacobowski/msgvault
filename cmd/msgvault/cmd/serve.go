@@ -299,6 +299,10 @@ func (a *storeAPIAdapter) GetMessageBodies(id int64) (text, html string, err err
 	return a.store.GetMessageBodies(id)
 }
 
+func (a *storeAPIAdapter) GetThread(id int64) (*store.APIThread, error) {
+	return a.store.GetThread(id)
+}
+
 func (a *storeAPIAdapter) GetMessagesSummariesByIDs(ids []int64) ([]api.APIMessage, error) {
 	return a.store.GetMessagesSummariesByIDs(ids)
 }

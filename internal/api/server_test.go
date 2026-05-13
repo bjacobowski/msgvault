@@ -12,6 +12,7 @@ import (
 
 	"github.com/wesm/msgvault/internal/config"
 	"github.com/wesm/msgvault/internal/search"
+	"github.com/wesm/msgvault/internal/store"
 )
 
 // testLogger returns a logger for tests that discards output
@@ -73,6 +74,9 @@ type mockStore struct {
 	// rfc822 mapping for the by-rfc822-id lookup endpoint.
 	rfc822Index map[string]int64
 
+	// threads, keyed by thread id, used by the threads endpoints.
+	threads map[int64]*store.APIThread
+
 	// Call counts so tests can assert that bulk hydration paths use
 	// GetMessagesSummariesByIDs (one round-trip) instead of looping
 	// GetMessage (per-hit N+1).
@@ -108,6 +112,17 @@ func (m *mockStore) GetMessageByRFC822ID(rfc822ID string) (*APIMessage, error) {
 		return nil, nil
 	}
 	return m.GetMessage(id)
+}
+
+func (m *mockStore) GetThread(id int64) (*store.APIThread, error) {
+	if m.threads == nil {
+		return nil, nil
+	}
+	t, ok := m.threads[id]
+	if !ok {
+		return nil, nil
+	}
+	return t, nil
 }
 
 func (m *mockStore) GetMessageBodies(id int64) (text, html string, err error) {

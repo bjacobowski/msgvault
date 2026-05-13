@@ -21,6 +21,7 @@ import (
 	"github.com/wesm/msgvault/internal/query"
 	"github.com/wesm/msgvault/internal/query/querytest"
 	"github.com/wesm/msgvault/internal/remote"
+	"github.com/wesm/msgvault/internal/store"
 	"github.com/wesm/msgvault/internal/vector"
 	"github.com/wesm/msgvault/internal/vector/hybrid"
 )
@@ -33,6 +34,15 @@ type stubEmbedder struct{}
 
 func (stubEmbedder) Embed(_ context.Context, _ []string) ([][]float32, error) {
 	return nil, errors.New("stubEmbedder.Embed should not be called in this test")
+}
+
+func mustParseTime(t *testing.T, s string) time.Time {
+	t.Helper()
+	got, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		t.Fatalf("parse %q: %v", s, err)
+	}
+	return got
 }
 
 func newTestServerWithMockStore(t *testing.T) (*Server, *mockStore) {
@@ -2556,6 +2566,122 @@ func TestHandleMessageBody(t *testing.T) {
 		srv.Router().ServeHTTP(w, req)
 		if w.Code != http.StatusNotFound {
 			t.Errorf("status = %d, want 404", w.Code)
+		}
+	})
+}
+
+func TestHandleGetThread(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	t1 := mustParseTime(t, "2026-05-12T10:00:00Z")
+	t2 := mustParseTime(t, "2026-05-12T11:00:00Z")
+	ms.threads = map[int64]*store.APIThread{
+		4421: {
+			ID:           4421,
+			Subject:      "RE: Docusign update",
+			MessageCount: 2,
+			Participants: []store.APIThreadParticipant{
+				{ID: 10, Name: "Alice", Address: "alice@example.com"},
+				{ID: 11, Address: "bob@example.com"},
+			},
+			Messages: []store.APIThreadMessage{
+				{ID: 11122, FromName: "Alice", From: "alice@example.com", SentAt: t1, Snippet: "Hi"},
+				{ID: 11134, From: "bob@example.com", SentAt: t2, Snippet: "Reply"},
+			},
+		},
+	}
+
+	t.Run("hit", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v1/threads/4421", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		var resp ThreadResponse
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.ID != 4421 || resp.Subject != "RE: Docusign update" {
+			t.Errorf("thread header = (%d, %q)", resp.ID, resp.Subject)
+		}
+		if resp.MessageCount != 2 || len(resp.Messages) != 2 {
+			t.Errorf("MessageCount=%d, Messages=%d", resp.MessageCount, len(resp.Messages))
+		}
+		if len(resp.Participants) != 2 {
+			t.Errorf("participants = %d, want 2", len(resp.Participants))
+		}
+		if resp.Messages[0].SentAt != "2026-05-12T10:00:00Z" {
+			t.Errorf("first message sent_at = %q", resp.Messages[0].SentAt)
+		}
+	})
+
+	t.Run("miss → 404 JSON", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v1/threads/9999", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", w.Code)
+		}
+		var resp map[string]interface{}
+		_ = json.NewDecoder(w.Body).Decode(&resp)
+		if resp["error"] != "not_found" {
+			t.Errorf("error = %v, want not_found", resp["error"])
+		}
+	})
+
+	t.Run("non-numeric id → 400 JSON", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v1/threads/abc", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", w.Code)
+		}
+	})
+}
+
+func TestHandleThreadView_HTML(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	ms.threads = map[int64]*store.APIThread{
+		1: {
+			ID:           1,
+			Subject:      "Hello world",
+			MessageCount: 1,
+			Messages: []store.APIThreadMessage{
+				{ID: 11, From: "alice@example.com", FromName: "Alice",
+					SentAt: mustParseTime(t, "2026-05-12T10:00:00Z"), Snippet: "Hi"},
+			},
+		},
+	}
+
+	t.Run("hit renders HTML", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/t/1", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+			t.Errorf("Content-Type = %q, want text/html prefix", ct)
+		}
+		body := w.Body.String()
+		if !strings.Contains(body, "Hello world") {
+			t.Errorf("HTML body missing subject; got: %s", body)
+		}
+		if !strings.Contains(body, "alice@example.com") {
+			t.Errorf("HTML body missing sender; got: %s", body)
+		}
+	})
+
+	t.Run("miss renders not-found HTML, not the inbox", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/t/9999", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", w.Code)
+		}
+		body := w.Body.String()
+		if !strings.Contains(body, "not found in this corpus") {
+			t.Errorf("not-found body should call out corpus mismatch; got: %s", body)
 		}
 	})
 }

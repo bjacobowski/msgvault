@@ -29,6 +29,7 @@ type MessageStore interface {
 	GetMessage(id int64) (*APIMessage, error)
 	GetMessageByRFC822ID(rfc822ID string) (*APIMessage, error)
 	GetMessageBodies(id int64) (text, html string, err error)
+	GetThread(id int64) (*store.APIThread, error)
 	GetMessagesSummariesByIDs(ids []int64) ([]APIMessage, error)
 	SearchMessages(query string, offset, limit int) ([]APIMessage, int64, error)
 	SearchMessagesQuery(q *search.Query, offset, limit int) ([]APIMessage, int64, error)
@@ -166,6 +167,14 @@ func (s *Server) setupRouter() chi.Router {
 	r.Get("/health", s.handleHealth)
 	r.Head("/health", s.handleHealth)
 
+	// HTML views (chrome-less, designed to iframe-embed). Same auth posture
+	// as /api/v1 read endpoints: free under public_read, otherwise gated by
+	// the API key.
+	r.Group(func(r chi.Router) {
+		r.Use(s.publicReadOrAuth)
+		r.Get("/t/{id}", s.handleThreadView)
+	})
+
 	// API routes. The /api/v1 mount splits into two groups:
 	//
 	//   * Read group — GET/HEAD endpoints that are safe to expose without
@@ -184,6 +193,7 @@ func (s *Server) setupRouter() chi.Router {
 			r.Get("/messages/{id}/body", s.handleMessageBody)
 			r.Get("/messages/{id}/inline", s.handleMessageInline)
 			r.Get("/messages/by-rfc822-id/{rfc822_id}", s.handleGetMessageByRFC822ID)
+			r.Get("/threads/{id}", s.handleGetThread)
 			r.Get("/search", s.handleSearch)
 			r.Get("/aggregates", s.handleAggregates)
 			r.Get("/aggregates/sub", s.handleSubAggregates)
