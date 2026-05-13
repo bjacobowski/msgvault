@@ -104,6 +104,32 @@ func (s *Store) GetMessageIDByRFC822ID(
 	return id, err
 }
 
+// GetMessageByRFC822ID returns the first non-deleted message with the given
+// RFC822 Message-ID across all sources, or nil if none match. When multiple
+// sources contain the same Message-ID (e.g. the user received the message
+// at two of their own accounts) the lowest internal id wins.
+//
+// There is no dedicated index on rfc822_message_id alone; this is a
+// full-table scan and is intended for low-volume lookups (citation
+// resolution) rather than ingest paths, which use the per-source
+// GetMessageIDByRFC822ID instead.
+func (s *Store) GetMessageByRFC822ID(rfc822ID string) (*APIMessage, error) {
+	var id int64
+	err := s.db.QueryRow(
+		`SELECT id FROM messages
+		 WHERE rfc822_message_id = ?
+		 ORDER BY id LIMIT 1`,
+		rfc822ID,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.GetMessage(id)
+}
+
 // UpdateMessageOnDedup updates an existing message's composite ID
 // and labels when a cross-mailbox RFC822 dedup match is found.
 // This ensures future syncs recognize the message under its new

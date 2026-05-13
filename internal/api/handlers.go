@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -396,6 +397,173 @@ func (s *Server) handleGetMessage(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, detail)
 }
+
+// handleGetMessageByRFC822ID looks up a message by its RFC822 Message-ID
+// header. URL path: /api/v1/messages/by-rfc822-id/{rfc822_id} where
+// {rfc822_id} is URL-encoded — the chi router decodes path segments for us.
+// Returns the same MessageDetail shape as /messages/{id}, or 404 with a
+// consistent JSON error body when no message matches.
+//
+// The query engine doesn't have a by-rfc822 entry point; this handler
+// resolves through the store only.
+func (s *Server) handleGetMessageByRFC822ID(w http.ResponseWriter, r *http.Request) {
+	rfcID := chi.URLParam(r, "rfc822_id")
+	if rfcID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_rfc822_id", "RFC822 Message-ID is required")
+		return
+	}
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
+		return
+	}
+
+	msg, err := s.store.GetMessageByRFC822ID(rfcID)
+	if err != nil {
+		s.logger.Error("failed to get message by rfc822 id", "rfc822_id", rfcID, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve message")
+		return
+	}
+	if msg == nil {
+		writeError(w, http.StatusNotFound, "not_found", "Message not found")
+		return
+	}
+
+	detail := MessageDetail{
+		MessageSummary: toMessageSummary(*msg),
+		Body:           msg.Body,
+	}
+	attachments := make([]AttachmentInfo, 0, len(msg.Attachments))
+	for _, att := range msg.Attachments {
+		attachments = append(attachments, AttachmentInfo(att))
+	}
+	detail.Attachments = attachments
+
+	writeJSON(w, http.StatusOK, detail)
+}
+
+// handleMessageBody serves the raw body of a message as text/html or
+// text/plain. Query param `format` selects the variant:
+//
+//	format=html (default when an HTML part exists) → text/html; charset=utf-8
+//	format=text (default otherwise)                → text/plain; charset=utf-8
+//
+// When only one body part exists, the other format renders a best-effort
+// fallback (text wrapped in <pre> for html requests; html served as
+// text/plain for text requests). 404 with a JSON error body when the
+// message does not exist.
+func (s *Server) handleMessageBody(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "Message ID must be a number")
+		return
+	}
+
+	format := r.URL.Query().Get("format")
+	switch format {
+	case "", "html", "text":
+		// ok
+	default:
+		writeError(w, http.StatusBadRequest, "invalid_format", "format must be html or text")
+		return
+	}
+
+	bodyText, bodyHTML, found, err := s.fetchBodies(r.Context(), id)
+	if err != nil {
+		s.logger.Error("failed to load message body", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve message body")
+		return
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "not_found", "Message not found")
+		return
+	}
+
+	if format == "" {
+		if bodyHTML != "" {
+			format = "html"
+		} else {
+			format = "text"
+		}
+	}
+
+	switch format {
+	case "html":
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		if bodyHTML != "" {
+			_, _ = w.Write([]byte(bodyHTML))
+		} else {
+			// Wrap plain text safely so browsers don't try to interpret it.
+			_, _ = w.Write([]byte("<pre>"))
+			_, _ = w.Write([]byte(htmlEscape(bodyText)))
+			_, _ = w.Write([]byte("</pre>"))
+		}
+	case "text":
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		if bodyText != "" {
+			_, _ = w.Write([]byte(bodyText))
+		} else {
+			// Best-effort fallback: serve the HTML as text — better than
+			// returning empty, lets the caller still pattern-match content.
+			_, _ = w.Write([]byte(bodyHTML))
+		}
+	}
+}
+
+// fetchBodies resolves the text and HTML body parts for a message via the
+// query engine when available, falling back to the store. The `found`
+// return distinguishes "message exists but has no body" from
+// "message does not exist".
+func (s *Server) fetchBodies(ctx context.Context, id int64) (text, html string, found bool, err error) {
+	if s.engine != nil {
+		qMsg, engErr := s.engine.GetMessage(ctx, id)
+		switch {
+		case engErr != nil && !isEngineUnsupported(engErr):
+			return "", "", false, engErr
+		case engErr == nil && qMsg == nil:
+			return "", "", false, nil
+		case engErr == nil:
+			return qMsg.BodyText, qMsg.BodyHTML, true, nil
+		}
+		// fall through on engine-unsupported
+	}
+	if s.store == nil {
+		return "", "", false, errStoreUnavailable
+	}
+	// Confirm the message exists; GetMessageBodies alone can't distinguish
+	// "no body row" from "no message at all".
+	msg, err := s.store.GetMessage(id)
+	if err != nil {
+		return "", "", false, err
+	}
+	if msg == nil {
+		return "", "", false, nil
+	}
+	t, h, err := s.store.GetMessageBodies(id)
+	if err != nil {
+		return "", "", false, err
+	}
+	return t, h, true, nil
+}
+
+// htmlEscape minimally escapes plain text for safe inclusion in an HTML
+// document. Avoids pulling html/template just to escape a body.
+func htmlEscape(s string) string {
+	replacer := strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		`"`, "&quot;",
+		"'", "&#39;",
+	)
+	return replacer.Replace(s)
+}
+
+// errStoreUnavailable is the sentinel returned by fetchBodies when neither
+// the engine nor the store can answer.
+var errStoreUnavailable = errors.New("store unavailable")
 
 // handleSearch searches messages.
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {

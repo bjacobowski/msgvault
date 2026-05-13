@@ -2401,3 +2401,161 @@ func TestHandleGetMessage_EngineUnsupportedFallsBackToStore(t *testing.T) {
 		t.Errorf("subject = %q, want %q (store path response)", resp["subject"], "Test Subject")
 	}
 }
+
+func TestHandleGetMessageByRFC822ID(t *testing.T) {
+	srv, store := newTestServerWithMockStore(t)
+	store.rfc822Index = map[string]int64{
+		"<CAOh-abc@mail.example.com>": 1,
+	}
+
+	t.Run("hit", func(t *testing.T) {
+		req := httptest.NewRequest("GET",
+			"/api/v1/messages/by-rfc822-id/%3CCAOh-abc@mail.example.com%3E", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		var resp map[string]interface{}
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if got := resp["id"]; got != float64(1) {
+			t.Errorf("id = %v, want 1", got)
+		}
+		if got := resp["subject"]; got != "Test Subject" {
+			t.Errorf("subject = %v, want %q", got, "Test Subject")
+		}
+	})
+
+	t.Run("miss returns 404 JSON", func(t *testing.T) {
+		req := httptest.NewRequest("GET",
+			"/api/v1/messages/by-rfc822-id/%3Cnope@example.com%3E", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want 404", w.Code)
+		}
+		ct := w.Header().Get("Content-Type")
+		if !strings.HasPrefix(ct, "application/json") {
+			t.Errorf("Content-Type = %q, want application/json prefix", ct)
+		}
+		var resp map[string]interface{}
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode 404: %v", err)
+		}
+		if resp["error"] != "not_found" {
+			t.Errorf("error = %v, want not_found", resp["error"])
+		}
+	})
+}
+
+func TestHandleMessageBody(t *testing.T) {
+	t.Run("format=text returns plaintext body", func(t *testing.T) {
+		srv, store := newTestServerWithMockStore(t)
+		store.bodies = map[int64][2]string{
+			1: {"hello text", ""},
+		}
+
+		req := httptest.NewRequest("GET", "/api/v1/messages/1/body?format=text", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		if ct := w.Header().Get("Content-Type"); ct != "text/plain; charset=utf-8" {
+			t.Errorf("Content-Type = %q, want text/plain; charset=utf-8", ct)
+		}
+		if got := w.Body.String(); got != "hello text" {
+			t.Errorf("body = %q, want %q", got, "hello text")
+		}
+	})
+
+	t.Run("format=html returns HTML body verbatim", func(t *testing.T) {
+		srv, store := newTestServerWithMockStore(t)
+		store.bodies = map[int64][2]string{
+			1: {"", "<p>hello</p>"},
+		}
+
+		req := httptest.NewRequest("GET", "/api/v1/messages/1/body?format=html", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		if ct := w.Header().Get("Content-Type"); ct != "text/html; charset=utf-8" {
+			t.Errorf("Content-Type = %q, want text/html; charset=utf-8", ct)
+		}
+		if got := w.Body.String(); got != "<p>hello</p>" {
+			t.Errorf("body = %q, want %q", got, "<p>hello</p>")
+		}
+	})
+
+	t.Run("format=html wraps plain text when no HTML body exists", func(t *testing.T) {
+		srv, store := newTestServerWithMockStore(t)
+		store.bodies = map[int64][2]string{
+			1: {"a < b & c > d", ""},
+		}
+
+		req := httptest.NewRequest("GET", "/api/v1/messages/1/body?format=html", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		got := w.Body.String()
+		want := "<pre>a &lt; b &amp; c &gt; d</pre>"
+		if got != want {
+			t.Errorf("body = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("no format defaults to html when HTML present, text otherwise", func(t *testing.T) {
+		srv, store := newTestServerWithMockStore(t)
+		store.bodies = map[int64][2]string{
+			1: {"plain only", ""},
+		}
+
+		req := httptest.NewRequest("GET", "/api/v1/messages/1/body", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if ct := w.Header().Get("Content-Type"); ct != "text/plain; charset=utf-8" {
+			t.Errorf("default Content-Type for text-only = %q, want text/plain", ct)
+		}
+
+		store.bodies = map[int64][2]string{
+			1: {"", "<b>html</b>"},
+		}
+		req2 := httptest.NewRequest("GET", "/api/v1/messages/1/body", nil)
+		w2 := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w2, req2)
+		if ct := w2.Header().Get("Content-Type"); ct != "text/html; charset=utf-8" {
+			t.Errorf("default Content-Type for html-present = %q, want text/html", ct)
+		}
+	})
+
+	t.Run("invalid format → 400", func(t *testing.T) {
+		srv, _ := newTestServerWithMockStore(t)
+		req := httptest.NewRequest("GET", "/api/v1/messages/1/body?format=xml", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", w.Code)
+		}
+	})
+
+	t.Run("unknown id → 404 JSON", func(t *testing.T) {
+		srv, _ := newTestServerWithMockStore(t)
+		req := httptest.NewRequest("GET", "/api/v1/messages/9999/body", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", w.Code)
+		}
+	})
+}

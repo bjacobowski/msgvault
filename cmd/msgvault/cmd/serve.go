@@ -291,6 +291,14 @@ func (a *storeAPIAdapter) GetMessage(id int64) (*api.APIMessage, error) {
 	return a.store.GetMessage(id)
 }
 
+func (a *storeAPIAdapter) GetMessageByRFC822ID(rfc822ID string) (*api.APIMessage, error) {
+	return a.store.GetMessageByRFC822ID(rfc822ID)
+}
+
+func (a *storeAPIAdapter) GetMessageBodies(id int64) (text, html string, err error) {
+	return a.store.GetMessageBodies(id)
+}
+
 func (a *storeAPIAdapter) GetMessagesSummariesByIDs(ids []int64) ([]api.APIMessage, error) {
 	return a.store.GetMessagesSummariesByIDs(ids)
 }

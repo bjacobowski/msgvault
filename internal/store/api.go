@@ -178,6 +178,28 @@ func (s *Store) GetMessage(id int64) (*APIMessage, error) {
 	return &m, nil
 }
 
+// GetMessageBodies returns the raw text and HTML body parts for a message,
+// each empty if missing. Returns ("", "", nil) when the message has no
+// recorded body (or doesn't exist) — callers needing to distinguish
+// "no message" from "no body" should pair this with GetMessage.
+//
+// This is the only access path besides GetMessage that touches the
+// message_bodies table; it preserves the small-B-tree invariant.
+func (s *Store) GetMessageBodies(id int64) (text, html string, err error) {
+	var t, h sql.NullString
+	err = s.db.QueryRow(
+		"SELECT body_text, body_html FROM message_bodies WHERE message_id = ?",
+		id,
+	).Scan(&t, &h)
+	if err == sql.ErrNoRows {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("get message bodies: %w", err)
+	}
+	return t.String, h.String, nil
+}
+
 // GetMessagesSummariesByIDs returns summary-level (no body, no
 // attachments) APIMessage rows for the supplied IDs in the same order
 // as ids. Missing IDs are silently dropped — callers are expected to

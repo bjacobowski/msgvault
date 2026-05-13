@@ -66,6 +66,13 @@ type mockStore struct {
 	messages []APIMessage
 	total    int64
 
+	// bodies, keyed by message id, lets tests exercise the body endpoint
+	// without standing up the full store. Each entry holds (text, html).
+	bodies map[int64][2]string
+
+	// rfc822 mapping for the by-rfc822-id lookup endpoint.
+	rfc822Index map[string]int64
+
 	// Call counts so tests can assert that bulk hydration paths use
 	// GetMessagesSummariesByIDs (one round-trip) instead of looping
 	// GetMessage (per-hit N+1).
@@ -93,6 +100,25 @@ func (m *mockStore) GetMessage(id int64) (*APIMessage, error) {
 		}
 	}
 	return nil, nil
+}
+
+func (m *mockStore) GetMessageByRFC822ID(rfc822ID string) (*APIMessage, error) {
+	id, ok := m.rfc822Index[rfc822ID]
+	if !ok {
+		return nil, nil
+	}
+	return m.GetMessage(id)
+}
+
+func (m *mockStore) GetMessageBodies(id int64) (text, html string, err error) {
+	if m.bodies == nil {
+		return "", "", nil
+	}
+	pair, ok := m.bodies[id]
+	if !ok {
+		return "", "", nil
+	}
+	return pair[0], pair[1], nil
 }
 
 func (m *mockStore) GetMessagesSummariesByIDs(ids []int64) ([]APIMessage, error) {
