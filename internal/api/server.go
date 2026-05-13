@@ -132,13 +132,24 @@ func (s *Server) setupRouter() chi.Router {
 	// timeout (http.TimeoutHandler-style), that test will fail.
 	r.Use(chimw.Timeout(s.requestTimeout))
 
-	// CORS middleware (config-driven; disabled when no origins configured)
+	// API contract version header (radical-roc and similar consumers can
+	// pin against this).
+	r.Use(APIVersionHeaderMiddleware)
+
+	// CORS middleware (config-driven; disabled when no origins configured).
+	// When public_read is on and no origins were configured, default to "*"
+	// so file:// artifacts (Origin: null) can fetch read endpoints. The
+	// blast radius is bounded because public_read only relaxes GET/HEAD
+	// auth, and the server still defaults to loopback bind.
 	corsConfig := CORSConfig{
 		AllowedOrigins:   s.cfg.Server.CORSOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-API-Key"},
 		AllowCredentials: s.cfg.Server.CORSCredentials,
 		MaxAge:           s.cfg.Server.CORSMaxAge,
+	}
+	if s.cfg.Server.PublicRead && len(corsConfig.AllowedOrigins) == 0 {
+		corsConfig.AllowedOrigins = []string{"*"}
 	}
 	if corsConfig.MaxAge == 0 && len(corsConfig.AllowedOrigins) > 0 {
 		corsConfig.MaxAge = 86400
@@ -153,41 +164,41 @@ func (s *Server) setupRouter() chi.Router {
 	r.Get("/health", s.handleHealth)
 	r.Head("/health", s.handleHealth)
 
-	// API routes (auth required)
+	// API routes. The /api/v1 mount splits into two groups:
+	//
+	//   * Read group — GET/HEAD endpoints that are safe to expose without
+	//     an API key when [server].public_read is true. Used by file://
+	//     review-app artifacts (e.g. radical-roc) that can't carry a
+	//     credential without leaking it.
+	//   * Write group — POSTs and anything privileged. Always requires the
+	//     API key when one is configured.
 	r.Route("/api/v1", func(r chi.Router) {
-		// Apply API key authentication
-		r.Use(s.authMiddleware)
+		r.Group(func(r chi.Router) {
+			r.Use(s.publicReadOrAuth)
 
-		// Stats
-		r.Get("/stats", s.handleStats)
+			r.Get("/stats", s.handleStats)
+			r.Get("/messages", s.handleListMessages)
+			r.Get("/messages/{id}", s.handleGetMessage)
+			r.Get("/messages/{id}/inline", s.handleMessageInline)
+			r.Get("/search", s.handleSearch)
+			r.Get("/aggregates", s.handleAggregates)
+			r.Get("/aggregates/sub", s.handleSubAggregates)
+			r.Get("/messages/filter", s.handleFilteredMessages)
+			r.Get("/stats/total", s.handleTotalStats)
+			r.Get("/search/fast", s.handleFastSearch)
+			r.Get("/search/deep", s.handleDeepSearch)
+			r.Get("/accounts", s.handleListAccounts)
+			r.Get("/scheduler/status", s.handleSchedulerStatus)
+		})
 
-		// Messages
-		r.Get("/messages", s.handleListMessages)
-		r.Get("/messages/{id}", s.handleGetMessage)
-		r.Get("/messages/{id}/inline", s.handleMessageInline)
+		r.Group(func(r chi.Router) {
+			r.Use(s.authMiddleware)
 
-		// Search
-		r.Get("/search", s.handleSearch)
-
-		// TUI aggregate endpoints (require query engine)
-		r.Post("/query", s.handleQuery)
-		r.Get("/aggregates", s.handleAggregates)
-		r.Get("/aggregates/sub", s.handleSubAggregates)
-		r.Get("/messages/filter", s.handleFilteredMessages)
-		r.Get("/stats/total", s.handleTotalStats)
-		r.Get("/search/fast", s.handleFastSearch)
-		r.Get("/search/deep", s.handleDeepSearch)
-
-		// Accounts and sync
-		r.Get("/accounts", s.handleListAccounts)
-		r.Post("/accounts", s.handleAddAccount)
-		r.Post("/sync/{account}", s.handleTriggerSync)
-
-		// Scheduler status
-		r.Get("/scheduler/status", s.handleSchedulerStatus)
-
-		// Token upload for headless OAuth
-		r.Post("/auth/token/{email}", s.handleUploadToken)
+			r.Post("/query", s.handleQuery)
+			r.Post("/accounts", s.handleAddAccount)
+			r.Post("/sync/{account}", s.handleTriggerSync)
+			r.Post("/auth/token/{email}", s.handleUploadToken)
+		})
 	})
 
 	return r
@@ -264,6 +275,20 @@ func (s *Server) loggerMiddleware(next http.Handler) http.Handler {
 		}()
 
 		next.ServeHTTP(ww, r)
+	})
+}
+
+// publicReadOrAuth permits unauthenticated GET/HEAD when
+// [server].public_read is true; otherwise it falls through to the standard
+// API-key check. Used on the read endpoints under /api/v1 so review apps
+// served from file:// can fetch citations without embedding a key.
+func (s *Server) publicReadOrAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.Server.PublicRead && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		s.authMiddleware(next).ServeHTTP(w, r)
 	})
 }
 

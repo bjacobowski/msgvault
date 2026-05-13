@@ -150,11 +150,26 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
+// isLoopbackIP reports whether the given IP literal is a loopback address.
+// Empty / unparseable input returns false so we fail closed on unknown clients.
+func isLoopbackIP(ip string) bool {
+	parsed := net.ParseIP(ip)
+	return parsed != nil && parsed.IsLoopback()
+}
+
 // RateLimitMiddleware returns a middleware that rate limits requests by IP.
+// Loopback clients (127.0.0.0/8, ::1) bypass the limiter — same-host trust is
+// already assumed by the default bind posture, and a local review app may
+// fan out dozens of citation lookups in parallel.
 func RateLimitMiddleware(limiter *RateLimiter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ip := clientIP(r)
+
+			if isLoopbackIP(ip) {
+				next.ServeHTTP(w, r)
+				return
+			}
 
 			if !limiter.Allow(ip) {
 				w.Header().Set("Content-Type", "application/json")
@@ -167,4 +182,13 @@ func RateLimitMiddleware(limiter *RateLimiter) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// APIVersionHeaderMiddleware stamps every response with the API contract
+// version so consumers (e.g. radical-roc artifacts) can detect drift.
+func APIVersionHeaderMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-MsgVault-API", "v1")
+		next.ServeHTTP(w, r)
+	})
 }

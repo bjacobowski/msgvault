@@ -206,6 +206,100 @@ func TestAuthMiddleware(t *testing.T) {
 	}
 }
 
+func TestPublicReadAuthMiddleware(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			APIPort:    8080,
+			APIKey:     "secret-key",
+			PublicRead: true,
+		},
+	}
+	sched := newMockScheduler()
+	srv := NewServer(cfg, nil, sched, testLogger())
+
+	t.Run("GET read endpoint without auth is allowed", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v1/stats", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code == http.StatusUnauthorized {
+			t.Errorf("status = 401, expected non-401 (got past auth) under public_read")
+		}
+	})
+
+	t.Run("HEAD read endpoint without auth is allowed", func(t *testing.T) {
+		req := httptest.NewRequest("HEAD", "/api/v1/stats", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code == http.StatusUnauthorized {
+			t.Errorf("status = 401, expected non-401 under public_read")
+		}
+	})
+
+	t.Run("POST write endpoint without auth is rejected", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/api/v1/sync/test@gmail.com", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want 401 (writes still require auth)", w.Code)
+		}
+	})
+
+	t.Run("X-MsgVault-API header is stamped on responses", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v1/stats", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if got := w.Header().Get("X-MsgVault-API"); got != "v1" {
+			t.Errorf("X-MsgVault-API = %q, want %q", got, "v1")
+		}
+	})
+}
+
+func TestPublicReadDisabledStillRequiresAuth(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			APIPort:    8080,
+			APIKey:     "secret-key",
+			PublicRead: false,
+		},
+	}
+	sched := newMockScheduler()
+	srv := NewServer(cfg, nil, sched, testLogger())
+
+	req := httptest.NewRequest("GET", "/api/v1/stats", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 when public_read is off", w.Code)
+	}
+}
+
+func TestPublicReadDefaultsCORSToWildcard(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			APIPort:    8080,
+			PublicRead: true,
+			// CORSOrigins intentionally empty: public_read should default
+			// it to "*" so file:// (Origin: null) artifacts can fetch.
+		},
+	}
+	sched := newMockScheduler()
+	srv := NewServer(cfg, nil, sched, testLogger())
+
+	req := httptest.NewRequest("OPTIONS", "/api/v1/stats", nil)
+	req.Header.Set("Origin", "null")
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "null" {
+		t.Errorf("Access-Control-Allow-Origin = %q, want %q (echoed null origin under wildcard)", got, "null")
+	}
+	if w.Code != http.StatusNoContent {
+		t.Errorf("preflight status = %d, want 204", w.Code)
+	}
+}
+
 func TestAuthMiddlewareNoKeyConfigured(t *testing.T) {
 	cfg := &config.Config{
 		Server: config.ServerConfig{
