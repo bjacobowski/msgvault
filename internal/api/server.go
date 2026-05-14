@@ -243,20 +243,38 @@ func (s *Server) setupRouter() chi.Router {
 	// internal/api/v2 package. Same posture as the /api/v1 read group
 	// (public_read auth-skip, loopback bypass).
 	//
-	// Two routes are mounted here rather than inside v2.Register
-	// because they're shared with v1: `/messages/{id}/body` and
-	// `/attachments/{id}/content` return raw bytes with the right
-	// Content-Type — there is no JSON shape to break — and dragging
-	// them through the v2 package would force v2 to import v1 (which
-	// would create a cyclic import, since v1 imports v2 here).
+	// Typed clients see /api/v2 as "the API" — they should not have
+	// to split requests across /api/v1 and /api/v2 to assemble a
+	// single page. Endpoints whose v1 JSON shape has no problem (no
+	// collapsed-string addresses, no missing fields) are remounted
+	// here directly using the v1 handler. Adding a parallel v2
+	// handler would duplicate code with no observable difference to
+	// the consumer; if v2-specific shape debt surfaces later, a
+	// dedicated handler can replace the remount one endpoint at a
+	// time.
+	//
+	// Same pattern applies to the two raw-bytes routes
+	// (/messages/{id}/body, /attachments/{id}/content): no JSON shape
+	// to break, and dragging them through the v2 package would force
+	// v2 to import v1 (cyclic — v1 imports v2 here).
 	r.Route("/api/v2", func(r chi.Router) {
 		r.Use(apiv2.APIVersionHeader)
 		r.Use(s.publicReadOrAuth)
 
 		apiv2.NewHandler(s.store, s.hybridEngine, s.vectorCfg, s.logger).Register(r)
 
+		// Raw-bytes endpoints (no JSON shape).
 		r.Get("/messages/{id}/body", s.handleMessageBody)
+		r.Get("/messages/{id}/inline", s.handleMessageInline)
 		r.Get("/attachments/{id}/content", s.handleAttachmentContent)
+
+		// Shape-identical remounts: same JSON, same handler.
+		r.Get("/stats", s.handleStats)
+		r.Get("/stats/total", s.handleTotalStats)
+		r.Get("/labels", s.handleListLabels)
+		r.Get("/corpus/fingerprint", s.handleCorpusFingerprint)
+		r.Get("/accounts", s.handleListAccounts)
+		r.Get("/scheduler/status", s.handleSchedulerStatus)
 	})
 
 	return r

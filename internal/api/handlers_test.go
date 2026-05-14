@@ -3188,6 +3188,46 @@ func TestV2BodyRouteReachesV1Handler(t *testing.T) {
 	}
 }
 
+// TestV2RemountedReadEndpoints: handful of v1 read endpoints whose
+// JSON shape needed no v2-specific changes are remounted under
+// /api/v2 so typed clients see a single API surface ("v2 is the
+// API"). The handler is the same v1 function in both places —
+// shape-identical by construction — and this test guards the mount
+// wiring: status 200 (not 404), v2 version header stamped.
+func TestV2RemountedReadEndpoints(t *testing.T) {
+	srv, ms := newTestServerWithMockStore(t)
+	ms.bodies = map[int64][2]string{1: {"inline body", ""}}
+	ms.corpusFingerprint = &store.APICorpusFingerprint{
+		Fingerprint:  "sha256:deadbeef",
+		AsOf:         mustParseTime(t, "2026-05-13T15:00:00Z"),
+		MessageCount: 100,
+	}
+
+	paths := []string{
+		"/api/v2/messages/1/inline",
+		"/api/v2/stats",
+		"/api/v2/stats/total",
+		"/api/v2/labels",
+		"/api/v2/corpus/fingerprint",
+		"/api/v2/accounts",
+		"/api/v2/scheduler/status",
+	}
+
+	for _, p := range paths {
+		t.Run(p, func(t *testing.T) {
+			req := httptest.NewRequest("GET", p, nil)
+			w := httptest.NewRecorder()
+			srv.Router().ServeHTTP(w, req)
+			if w.Code == http.StatusNotFound {
+				t.Fatalf("%s reached 404; remount not wired", p)
+			}
+			if got := w.Header().Get("X-MsgVault-API"); got != "v2" {
+				t.Errorf("%s: X-MsgVault-API = %q, want v2", p, got)
+			}
+		})
+	}
+}
+
 func TestHandleCorpusFingerprint_StableAcrossCalls(t *testing.T) {
 	// Real-store smoke check: two consecutive calls without any sync
 	// in between must return the same fingerprint. Uses the mock that
