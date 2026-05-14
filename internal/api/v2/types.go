@@ -132,6 +132,12 @@ type ThreadParticipant struct {
 // the v1 AttachmentResponse plus thread_id, account, and
 // inline_disposition so a deep-linked attachment view can render
 // context without another round-trip.
+//
+// Occurrences is omitempty and only set by the by-hash endpoint, which
+// returns the lowest-id row carrying a shared content_hash; consumers
+// hitting /attachments/{id} never see this field. >1 means the same
+// bytes appear on multiple messages — the message_id/thread_id/account
+// fields are then drawn from one representative row.
 type AttachmentDetail struct {
 	ID                int64  `json:"id"`
 	MessageID         int64  `json:"message_id"`
@@ -142,6 +148,7 @@ type AttachmentDetail struct {
 	SizeBytes         int64  `json:"size_bytes"`
 	ContentHash       string `json:"content_hash,omitempty"`
 	InlineDisposition bool   `json:"inline_disposition"`
+	Occurrences       int    `json:"occurrences,omitempty"`
 }
 
 // Participant is the v2 participant JSON. Adds is_user_account on top

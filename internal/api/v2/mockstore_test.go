@@ -54,6 +54,14 @@ type mockStore struct {
 	attachmentsV2  map[int64]*store.APIAttachmentDetailV2
 	participantsV2 map[int64]*store.APIParticipantV2
 
+	// attachmentHashIndex drives /attachments/by-hash/{sha256} —
+	// keyed by SHA-256 hex, returns the lowest-id occurrence and the
+	// total occurrence count.
+	attachmentHashIndex map[string]struct {
+		id          int64
+		occurrences int
+	}
+
 	searchMessagesCalls      int
 	searchMessagesQueryCalls int
 }
@@ -148,6 +156,14 @@ func (m *mockStore) BatchMessageMetaV2(ids []int64) (map[int64]*store.APIMessage
 		}
 	}
 	return out, nil
+}
+
+func (m *mockStore) GetAttachmentIDByHash(hash string) (int64, int, error) {
+	e, ok := m.attachmentHashIndex[hash]
+	if !ok {
+		return 0, 0, nil
+	}
+	return e.id, e.occurrences, nil
 }
 
 func (m *mockStore) GetAttachmentByIDV2(id int64) (*store.APIAttachmentDetailV2, error) {

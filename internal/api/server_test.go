@@ -80,6 +80,14 @@ type mockStore struct {
 	// attachmentsByID, keyed by attachment id, used by the attachment endpoints.
 	attachmentsByID map[int64]*store.APIAttachmentDetail
 
+	// attachmentHashIndex maps a SHA-256 content hash to the lowest-id
+	// row carrying it and the total occurrences count. Drives the
+	// /attachments/by-hash/{sha256} lookups.
+	attachmentHashIndex map[string]struct {
+		id          int64
+		occurrences int
+	}
+
 	// labels and labelMembership drive the labels endpoints.
 	labels          []store.APILabelCount
 	labelMembership map[string][]int64
@@ -277,6 +285,14 @@ func (m *mockStore) GetAttachmentByID(id int64) (*store.APIAttachmentDetail, err
 		return nil, nil
 	}
 	return a, nil
+}
+
+func (m *mockStore) GetAttachmentIDByHash(hash string) (int64, int, error) {
+	e, ok := m.attachmentHashIndex[hash]
+	if !ok {
+		return 0, 0, nil
+	}
+	return e.id, e.occurrences, nil
 }
 
 func (m *mockStore) GetThread(id int64) (*store.APIThread, error) {

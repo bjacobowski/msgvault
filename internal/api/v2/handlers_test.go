@@ -433,6 +433,95 @@ func TestHandleGetAttachment(t *testing.T) {
 	})
 }
 
+func TestHandleGetAttachmentByHash(t *testing.T) {
+	ms := &mockStore{}
+	ms.attachmentsV2 = map[int64]*store.APIAttachmentDetailV2{
+		7: {
+			ID: 7, MessageID: 100, ThreadID: 200,
+			AccountEmail: "user@example.com",
+			Filename:     "report.pdf", MimeType: "application/pdf",
+			SizeBytes: 4096, ContentHash: "aa" + strings.Repeat("0", 62),
+		},
+	}
+	ms.attachmentHashIndex = map[string]struct {
+		id          int64
+		occurrences int
+	}{
+		"aa" + strings.Repeat("0", 62): {id: 7, occurrences: 3},
+	}
+	r := newTestRouter(t, ms)
+
+	t.Run("hash hits return v2 detail with occurrences", func(t *testing.T) {
+		path := "/api/v2/attachments/by-hash/aa" + strings.Repeat("0", 62)
+		req := httptest.NewRequest("GET", path, nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		if got := w.Header().Get("X-MsgVault-API"); got != "v2" {
+			t.Errorf("X-MsgVault-API = %q, want v2", got)
+		}
+		var resp AttachmentDetail
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.ID != 7 || resp.MessageID != 100 {
+			t.Errorf("representative row wrong: %+v", resp)
+		}
+		if resp.Occurrences != 3 {
+			t.Errorf("occurrences = %d, want 3", resp.Occurrences)
+		}
+		if !resp.InlineDisposition {
+			t.Errorf("PDF must report inline_disposition=true")
+		}
+	})
+
+	t.Run("uppercase hex is normalized", func(t *testing.T) {
+		// Hash lookups are case-insensitive on the wire — the handler
+		// lowercases before the store lookup so callers can paste a
+		// hash without worrying about source casing.
+		path := "/api/v2/attachments/by-hash/AA" + strings.Repeat("0", 62)
+		req := httptest.NewRequest("GET", path, nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("unknown hash returns 404", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/v2/attachments/by-hash/"+strings.Repeat("0", 64), nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", w.Code)
+		}
+	})
+
+	t.Run("malformed hash returns 400", func(t *testing.T) {
+		cases := []string{
+			"not-a-hash",
+			strings.Repeat("g", 64), // non-hex char
+			strings.Repeat("a", 63), // wrong length
+			strings.Repeat("a", 65), // wrong length
+		}
+		for _, h := range cases {
+			req := httptest.NewRequest("GET", "/api/v2/attachments/by-hash/"+h, nil)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("hash %q: status = %d, want 400", h, w.Code)
+			}
+			var er ErrorResponse
+			_ = json.NewDecoder(w.Body).Decode(&er)
+			if er.Error != "invalid_hash" {
+				t.Errorf("hash %q: error = %q, want invalid_hash", h, er.Error)
+			}
+		}
+	})
+}
+
 func TestHandleGetParticipant(t *testing.T) {
 	first := mustParseTime(t, "2024-01-01T00:00:00Z")
 	last := mustParseTime(t, "2026-05-13T00:00:00Z")

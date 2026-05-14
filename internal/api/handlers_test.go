@@ -2885,6 +2885,86 @@ func TestHandleAttachmentContent(t *testing.T) {
 	})
 }
 
+// TestHandleAttachmentContentByHash exercises
+// /api/v2/attachments/by-hash/{sha256}/content end-to-end. The handler
+// lives in the api package (it needs s.cfg.AttachmentsDir + s.store)
+// but is only mounted under /api/v2 per "v2 is the API".
+func TestHandleAttachmentContentByHash(t *testing.T) {
+	// Use a real 64-char hex hash because the handler validates the
+	// wire shape before hitting the store. attachmentTestSetup's
+	// short "abcd1234ef56" wouldn't pass validation.
+	hash := strings.Repeat("a", 64)
+	relPath := filepath.Join(hash[:2], hash)
+
+	setup := func(t *testing.T, mime, bodyBytes string) (*Server, *mockStore) {
+		t.Helper()
+		dir := t.TempDir()
+		full := filepath.Join(dir, "attachments", relPath)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(bodyBytes), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+
+		srv, ms := newTestServerWithMockStore(t)
+		srv.cfg.Data.DataDir = dir
+		ms.attachmentsByID = map[int64]*store.APIAttachmentDetail{
+			11: {
+				ID: 11, MessageID: 1, Filename: "report.pdf",
+				MimeType: mime, Size: int64(len(bodyBytes)),
+				ContentHash: hash, StoragePath: relPath,
+			},
+		}
+		ms.attachmentHashIndex = map[string]struct {
+			id          int64
+			occurrences int
+		}{
+			hash: {id: 11, occurrences: 1},
+		}
+		return srv, ms
+	}
+
+	t.Run("hash hit streams content with disposition", func(t *testing.T) {
+		srv, _ := setup(t, "application/pdf", "%PDF-1.4 fake")
+		req := httptest.NewRequest("GET", "/api/v2/attachments/by-hash/"+hash+"/content", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		if got := w.Header().Get("X-MsgVault-API"); got != "v2" {
+			t.Errorf("X-MsgVault-API = %q, want v2", got)
+		}
+		if ct := w.Header().Get("Content-Type"); ct != "application/pdf" {
+			t.Errorf("Content-Type = %q, want application/pdf", ct)
+		}
+		if disp := w.Header().Get("Content-Disposition"); !strings.HasPrefix(disp, "inline;") {
+			t.Errorf("Content-Disposition = %q, want inline prefix", disp)
+		}
+	})
+
+	t.Run("unknown hash returns 404", func(t *testing.T) {
+		srv, _ := setup(t, "application/pdf", "%PDF")
+		req := httptest.NewRequest("GET", "/api/v2/attachments/by-hash/"+strings.Repeat("b", 64)+"/content", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", w.Code)
+		}
+	})
+
+	t.Run("malformed hash returns 400", func(t *testing.T) {
+		srv, _ := setup(t, "application/pdf", "%PDF")
+		req := httptest.NewRequest("GET", "/api/v2/attachments/by-hash/not-a-hash/content", nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", w.Code)
+		}
+	})
+}
+
 func TestHandleAttachmentView_HTML(t *testing.T) {
 	t.Run("PDF preview iframes content", func(t *testing.T) {
 		srv, _, id := attachmentTestSetup(t, "application/pdf", "%PDF")

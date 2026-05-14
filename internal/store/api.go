@@ -662,6 +662,36 @@ func (s *Store) GetAttachmentByID(id int64) (*APIAttachmentDetail, error) {
 	return &d, nil
 }
 
+// GetAttachmentIDByHash resolves an SHA-256 content hash to the
+// lowest-id attachment row that carries it, plus the total number of
+// rows sharing the same hash. Returns (0, 0, nil) when no row matches.
+//
+// Attachment ids are per-database sqlite rowids — not portable across
+// archives or stable across re-imports. The content hash is the
+// stable cross-archive identifier; this lookup is the seam used by
+// /api/v2/attachments/by-hash/{sha256}{,/content}. Sorting by id keeps
+// the picked row deterministic (lowest id wins) so cache headers
+// downstream stay consistent even when the same bytes appear on
+// multiple messages.
+func (s *Store) GetAttachmentIDByHash(hash string) (int64, int, error) {
+	// MIN(id) is NULL when no rows match, so scan through sql.NullInt64
+	// to avoid the "converting NULL to int64" error. COUNT(*) is always
+	// a row, so this aggregate query returns exactly one tuple.
+	var id sql.NullInt64
+	var occurrences int
+	err := s.db.QueryRow(
+		`SELECT MIN(id), COUNT(*) FROM attachments WHERE content_hash = ?`,
+		hash,
+	).Scan(&id, &occurrences)
+	if err != nil {
+		return 0, 0, fmt.Errorf("attachment by hash: %w", err)
+	}
+	if !id.Valid || occurrences == 0 {
+		return 0, 0, nil
+	}
+	return id.Int64, occurrences, nil
+}
+
 // GetThread returns the thread (conversation) with the given id, including
 // its compact subject, deduplicated participants, and the per-message
 // summaries needed to render a review-pane view. Returns nil with no

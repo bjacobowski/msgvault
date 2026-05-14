@@ -29,6 +29,7 @@ type Store interface {
 	BatchStructuredRecipients(ids []int64) (map[int64]*store.APIRecipientsV2, error)
 	BatchMessageMetaV2(ids []int64) (map[int64]*store.APIMessageMetaV2, error)
 	GetAttachmentByIDV2(id int64) (*store.APIAttachmentDetailV2, error)
+	GetAttachmentIDByHash(hash string) (int64, int, error)
 	GetParticipantByIDV2(id int64) (*store.APIParticipantV2, error)
 }
 
@@ -71,6 +72,7 @@ func (h *Handler) Register(r chi.Router) {
 	r.Get("/participants/{id}", h.handleGetParticipant)
 	r.Get("/participants/{id}/messages", h.handleListMessagesByParticipant)
 	r.Get("/attachments/{id}", h.handleGetAttachment)
+	r.Get("/attachments/by-hash/{sha256}", h.handleGetAttachmentByHash)
 	r.Get("/search", h.handleSearch)
 }
 

@@ -32,6 +32,7 @@ type MessageStore interface {
 	GetMessageBodies(id int64) (text, html string, err error)
 	GetThread(id int64) (*store.APIThread, error)
 	GetAttachmentByID(id int64) (*store.APIAttachmentDetail, error)
+	GetAttachmentIDByHash(hash string) (int64, int, error)
 	ListLabels() ([]store.APILabelCount, error)
 	ListMessagesByLabel(name string, offset, limit int) ([]APIMessage, int64, error)
 	GetParticipantByID(id int64) (*store.APIParticipant, error)
@@ -267,6 +268,7 @@ func (s *Server) setupRouter() chi.Router {
 		r.Get("/messages/{id}/body", s.handleMessageBody)
 		r.Get("/messages/{id}/inline", s.handleMessageInline)
 		r.Get("/attachments/{id}/content", s.handleAttachmentContent)
+		r.Get("/attachments/by-hash/{sha256}/content", s.handleAttachmentContentByHash)
 
 		// Shape-identical remounts: same JSON, same handler.
 		r.Get("/stats", s.handleStats)

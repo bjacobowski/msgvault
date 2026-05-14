@@ -1073,11 +1073,63 @@ func (s *Server) handleAttachmentContent(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusNotFound, "not_found", "Attachment not found")
 		return
 	}
+	s.streamAttachment(w, r, att)
+}
 
+// handleAttachmentContentByHash streams the bytes for the attachment
+// matching the given SHA-256. Same wire shape as
+// handleAttachmentContent — only the lookup seam changes. Mounted
+// under /api/v2 (not /api/v1) since by-hash is a v2-era addition.
+func (s *Server) handleAttachmentContentByHash(w http.ResponseWriter, r *http.Request) {
+	rawHash := chi.URLParam(r, "sha256")
+	hash := strings.ToLower(rawHash)
+	if !isHexSHA256ContentHash(hash) {
+		writeError(w, http.StatusBadRequest, "invalid_hash",
+			"content hash must be 64 hex characters (SHA-256)")
+		return
+	}
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "store_unavailable", "Database not available")
+		return
+	}
+	if s.cfg == nil {
+		writeError(w, http.StatusServiceUnavailable, "config_unavailable", "Server config missing")
+		return
+	}
+
+	id, _, err := s.store.GetAttachmentIDByHash(hash)
+	if err != nil {
+		s.logger.Error("attachment content by hash lookup", "hash", hash, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to resolve attachment hash")
+		return
+	}
+	if id == 0 {
+		writeError(w, http.StatusNotFound, "not_found", "No attachment matches that content hash")
+		return
+	}
+	att, err := s.store.GetAttachmentByID(id)
+	if err != nil {
+		s.logger.Error("attachment content by hash hydrate", "hash", hash, "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to retrieve attachment")
+		return
+	}
+	if att == nil {
+		writeError(w, http.StatusNotFound, "not_found", "No attachment matches that content hash")
+		return
+	}
+	s.streamAttachment(w, r, att)
+}
+
+// streamAttachment is the post-lookup half of the content endpoints:
+// open the file under the configured attachments dir, set the
+// disposition/content-type headers, and delegate Range + If-Modified-Since
+// handling to http.ServeContent. Called by both the by-id and by-hash
+// content handlers.
+func (s *Server) streamAttachment(w http.ResponseWriter, r *http.Request, att *store.APIAttachmentDetail) {
 	fullPath := filepath.Join(s.cfg.AttachmentsDir(), filepath.FromSlash(att.StoragePath))
 	f, err := os.Open(fullPath) //nolint:gosec // path joined from server-configured root + DB-stored relative path
 	if err != nil {
-		s.logger.Warn("attachment file unavailable", "id", id, "path", fullPath, "error", err)
+		s.logger.Warn("attachment file unavailable", "id", att.ID, "path", fullPath, "error", err)
 		writeError(w, http.StatusGone, "content_unavailable", "Attachment file not on disk")
 		return
 	}
@@ -1085,7 +1137,7 @@ func (s *Server) handleAttachmentContent(w http.ResponseWriter, r *http.Request)
 
 	fi, err := f.Stat()
 	if err != nil {
-		s.logger.Error("attachment stat failed", "id", id, "error", err)
+		s.logger.Error("attachment stat failed", "id", att.ID, "error", err)
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to stat attachment")
 		return
 	}
@@ -1103,6 +1155,26 @@ func (s *Server) handleAttachmentContent(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Disposition",
 		fmt.Sprintf("%s; filename=%q", disposition, sanitizeFilenameForDisposition(att.Filename)))
 	http.ServeContent(w, r, att.Filename, fi.ModTime(), f)
+}
+
+// isHexSHA256ContentHash matches a 64-character hex digest (the wire
+// shape for a SHA-256). Validation lives in /api/v1 too because the
+// by-hash content endpoint is implemented here even though mounted
+// only under /api/v2.
+func isHexSHA256ContentHash(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9':
+		case r >= 'a' && r <= 'f':
+		case r >= 'A' && r <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // sanitizeFilenameForDisposition strips characters that would break a

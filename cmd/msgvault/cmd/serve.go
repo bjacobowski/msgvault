@@ -307,6 +307,10 @@ func (a *storeAPIAdapter) GetAttachmentByID(id int64) (*store.APIAttachmentDetai
 	return a.store.GetAttachmentByID(id)
 }
 
+func (a *storeAPIAdapter) GetAttachmentIDByHash(hash string) (int64, int, error) {
+	return a.store.GetAttachmentIDByHash(hash)
+}
+
 func (a *storeAPIAdapter) ListLabels() ([]store.APILabelCount, error) {
 	return a.store.ListLabels()
 }
