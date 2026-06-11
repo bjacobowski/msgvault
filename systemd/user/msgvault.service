@@ -1,0 +1,14 @@
+[Unit]
+Description=msgvault-omgnos serve (API :8090 + scheduled gmail ingest)
+# Only user-manager units in After/Wants — network-online.target is a system
+# target and does not exist here. Restart+backoff covers network readiness.
+After=tei.service
+Wants=tei.service
+
+[Service]
+ExecStart=%h/.local/bin/msgvault-omgnos serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -31,7 +31,10 @@
             vendorHash = "sha256-rhijudB9WzFKtLAhfpuPw3osbo2lymTw1V+ZjuVyigU=";
             proxyVendor = true;
             subPackages = [ subPackage ];
-            tags = [ "fts5" ];
+            tags = [ "fts5" "sqlite_vec" ];
+            # cgo: sqlite-vec needs sqlite3.h at compile time, the lib at link
+            nativeBuildInputs = [ pkgs.pkg-config ];
+            buildInputs = [ pkgs.sqlite ];
             ldflags = [
               "-X github.com/wesm/msgvault/cmd/msgvault/cmd.Version=nix-dev"
             ];
