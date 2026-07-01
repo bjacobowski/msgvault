@@ -1,44 +1,52 @@
-
-.beads/
-.claude/
-# Claude Code
-client_secret*.json
-# Database files
-*.db
-*.db-shm
-*.db-wal
-.direnv/
-.DS_Store
-.env
-.env.*
 # Go binaries
-.gocache/
-# Go caches
-.gopath/
-# IDE
-.idea/
-# Local development state
-.mcp.json
-/mimeshootout
 /msgvault
-/msgvault-agent
-/msgvault-agent.exe
 /msgvault.exe
 /msgvault-omgnos
 /msgvault-omgnos.exe
-# Nix
-oauth_client*.json
-# OS files
-.projects/
-__pycache__/
-# Python
-result
-result*
-# Secrets and credentials
+/msgvault-agent
+/msgvault-agent.exe
+/mimeshootout
+
+# Database files
+*.db
 *.sqlite
 *.sqlite3
-*.sqlite-shm
+*.db-wal
+*.db-shm
 *.sqlite-wal
-*.swo
-*.swp
+*.sqlite-shm
+
+# Secrets and credentials
+.env
+.env.*
+client_secret*.json
+oauth_client*.json
+
+# OS files
+.DS_Store
+
+# Local development state
+.beads/
+.mcp.json
+
+# Python
+__pycache__/
+
+# Go caches
+.gocache/
+.gopath/
+
+# IDE
+.idea/
 .vscode/
+*.swp
+*.swo
+.projects/
+
+# Nix
+.direnv/
+/result
+/result-*
+
+# Claude Code
+.claude/
