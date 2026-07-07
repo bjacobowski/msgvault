@@ -6,16 +6,16 @@ review apps (e.g. radical-roc) depend on, the security posture knobs
 that govern how they're exposed, and the items declined in the current
 milestone.
 
-All endpoints are mounted under `/api/v1`; HTML companion views are at
-the root (`/m/{id}`, `/t/{id}`, etc.).
+JSON endpoints are mounted under `/api/v1` and `/api/v2`; HTML
+companion views are at the root (`/m/{id}`, `/t/{id}`, etc.).
 
 ## Auth and posture
 
 ### `[server].api_key`
 
-When set, every `/api/v1/*` request must carry the key in either
-`Authorization: Bearer …` or `X-API-Key`. When unset, the server logs a
-warning and runs unauthenticated.
+When set, every `/api/v1/*` and `/api/v2/*` request must carry the key
+in either `Authorization: Bearer …` or `X-API-Key`. When unset, the
+server logs a warning and runs unauthenticated.
 
 ### `[server].public_read` (default `false`)
 
@@ -73,18 +73,27 @@ existing consumers.
 
 v2 currently covers message list/detail/by-rfc822/body, thread,
 label-filtered list, participant detail + filtered list, attachment
-detail + content, and search. The remaining v1 endpoints (`/stats`,
+detail + content, attachment lookup by content hash, and unified
+FTS/vector/hybrid search. The remaining v1 endpoints (`/stats`,
 `/labels`, `/corpus/fingerprint`, and the HTML companion views) don't
 suffer from the v1 shape problems and stay v1-only. They'll grow v2
 variants only if a consumer hits an actual need.
 
 ### v2 list / search response shape
 
+List responses and FTS search responses include a numeric `total`.
+Vector and hybrid search return the same envelope but set `total` to
+`null` because there is no global count over the ranked top-k pool;
+`returned` is the number of hydrated hits in the current response.
+
 ```jsonc
 {
+  "query": "invoice",              // search only
+  "mode": "fts",                   // search only: fts | vector | hybrid
   "total": 10337,
   "offset": 0,
   "limit": 50,
+  "returned": 50,                  // search only
   "messages": [
     {
       "id": 11134,
@@ -107,7 +116,12 @@ variants only if a consumer hits an actual need.
       "is_deleted": false
     },
     ...
-  ]
+  ],
+
+  // vector/hybrid search only
+  "generation": { "id": 1, "model": "...", "dimension": 768, "fingerprint": "...", "state": "active" },
+  "pool_saturated": false,
+  "took_ms": 12
 }
 ```
 
@@ -147,7 +161,9 @@ of which are too expensive to pay per page. Hit
 | GET | `/api/v2/participants/{id}/messages` | Participant-filtered list (v2 shape). |
 | GET | `/api/v2/attachments/{id}` | Attachment metadata + `thread_id`, `account`, `inline_disposition`. |
 | GET | `/api/v2/attachments/{id}/content` | Same bytes as v1, mounted under v2 for path consistency. |
-| GET | `/api/v2/search?q=…` | FTS search returning v2 summaries (limit/offset). |
+| GET | `/api/v2/attachments/by-hash/{sha256}` | Attachment metadata by stable SHA-256 content hash. |
+| GET | `/api/v2/attachments/by-hash/{sha256}/content` | Attachment bytes by stable SHA-256 content hash. |
+| GET | `/api/v2/search?q=…&mode=fts\|vector\|hybrid` | Unified search returning v2 summaries. |
 
 ### HTML companions
 
@@ -234,7 +250,7 @@ zlib-decompress + MIME parse per detail call; fine for citation-lookup
 traffic, would warrant denormalizing if hot. Messages imported before
 raw MIME was persisted leave these fields empty rather than failing.
 
-### `GET /api/v1/attachments/{id}/content`
+### `GET /api/v1/attachments/{id}/content`, `GET /api/v2/attachments/{id}/content`, and `GET /api/v2/attachments/by-hash/{sha256}/content`
 
 `Content-Disposition` is governed by an inline-safe MIME safelist:
 
@@ -248,6 +264,33 @@ delegated to `http.ServeContent`.
 
 If the DB row exists but the on-disk blob is missing the response is
 `410 Gone`; unknown ids are `404 Not Found`.
+
+The by-hash content endpoint resolves `{sha256}` to the lowest-id
+attachment row carrying that 64-character hex digest, then streams the
+same bytes with the same headers as the by-id endpoint. Invalid hashes
+return `400 invalid_hash`; hashes with no match return `404 not_found`.
+
+### `GET /api/v2/attachments/by-hash/{sha256}`
+
+Returns the same `AttachmentDetail` shape as `/api/v2/attachments/{id}`,
+with an extra `occurrences` field when the same content hash appears on
+multiple attachment rows. Use this endpoint for stable cross-archive
+references: sqlite attachment ids are per-database rowids, while the
+content hash follows the bytes across re-imports.
+
+### `GET /api/v2/search?q=...&mode=fts|vector|hybrid`
+
+Returns one stable `SearchResponse` envelope across all modes:
+`query`, `mode`, `offset`, `limit`, `total`, `returned`, and
+`messages` are always present. `generation`, `pool_saturated`, and
+`took_ms` are present only for `mode=vector` and `mode=hybrid`.
+
+`mode=fts` honors `limit` and `offset`; `total` is the global match
+count. `mode=vector` and `mode=hybrid` rank a top-k relevance pool and
+reject `offset > 0` with `400 pagination_unsupported`; raise `limit`
+to widen the pool. For vector/hybrid responses, `total` is `null` and
+`returned` is the hydrated hit count. `explain=1` adds a per-hit
+`score` object when the ranking backend has signal details to expose.
 
 ### `GET /api/v1/corpus/fingerprint`
 
